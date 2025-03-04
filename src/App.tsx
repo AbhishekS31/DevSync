@@ -61,6 +61,7 @@ function App() {
   const [isConnected, setIsConnected] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [aiResponse, setAiResponse] = useState('');
+  const [currentModel, setCurrentModel] = useState('mixtral-8x7b-32768');
 
  const groq = new Groq({
     apiKey: import.meta.env.VITE_GROQ_API_KEY,
@@ -99,7 +100,7 @@ function App() {
     try {
       const completion = await groq.chat.completions.create({
         messages: [{ role: 'user', content: query }],
-        model: 'mixtral-8x7b-32768',
+        model: currentModel,
         temperature: 0.7,
         max_tokens: 1024,
       });
@@ -110,7 +111,7 @@ function App() {
       console.error('Error from AI:', error);
       setAiResponse('Sorry, there was an error processing your request.');
     }
-  }, [groq]);
+  }, [groq, currentModel]);
 
   const handleFileCreate = (parentId: string | null, name: string, type: 'file' | 'folder') => {
     const newNode: FileNode = {
@@ -208,6 +209,10 @@ function App() {
   const handleVoiceCall = (targetUserId: string) => {
     // Implement voice call logic here using the peer.ts functions
     console.log('Starting voice call with:', targetUserId);
+  };
+
+  const handleModelChange = (modelId: string) => {
+    setCurrentModel(modelId);
   };
 
   if (showOnboarding) {

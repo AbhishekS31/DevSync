@@ -114,7 +114,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: 20 }}
             >
-              <h1 className="text-3xl font-bold mb-6 text-center">Join CodeCollab</h1>
+              <h1 className="text-3xl font-bold mb-6 text-center">Join DevSync 🚀</h1>
               <form onSubmit={handleSubmitUsername} className="space-y-4">
                 <div>
                   <label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-1">
