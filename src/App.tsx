@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Editor from '@monaco-editor/react';
 import { Moon, Sun } from 'lucide-react';
 import * as Y from 'yjs';
 import { WebrtcProvider } from 'y-webrtc';
+import { MonacoBinding } from 'y-monaco';
 import { v4 as uuidv4 } from 'uuid';
 import { Navbar } from './components/Navbar';
 import { FileExplorer } from './components/FileExplorer';
@@ -15,6 +16,7 @@ import { UserList } from './components/UserList';
 import { AIAssistant } from './components/AIAssistant';
 import { getSocket } from './lib/socket';
 import { Groq } from 'groq-sdk';
+import * as monaco from 'monaco-editor';
 
 interface FileNode {
   id: string;
@@ -22,6 +24,12 @@ interface FileNode {
   type: 'file' | 'folder';
   children?: FileNode[];
   content?: string;
+}
+
+interface User {
+  id: string;
+  username: string;
+  color?: string;
 }
 
 const initialFiles: FileNode[] = [
@@ -45,6 +53,20 @@ const initialFiles: FileNode[] = [
   }
 ];
 
+// Array of colors for user cursors
+const userColors = [
+  '#FF5733', // Red-Orange
+  '#33FF57', // Green
+  '#3357FF', // Blue
+  '#FF33F5', // Pink
+  '#33FFF5', // Cyan
+  '#F5FF33', // Yellow
+  '#FF5733', // Orange
+  '#8A33FF', // Purple
+  '#FF8A33', // Amber
+  '#33FFAA'  // Teal
+];
+
 function App() {
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [code, setCode] = useState('// Start coding here...');
@@ -62,11 +84,49 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [aiResponse, setAiResponse] = useState('');
   const [currentModel, setCurrentModel] = useState('mixtral-8x7b-32768');
+  const [users, setUsers] = useState<User[]>([]);
+  const [sharedFiles, setSharedFiles] = useState<FileNode[]>([]);
+  
+  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+  const ydocRef = useRef<Y.Doc | null>(null);
+  const providerRef = useRef<WebrtcProvider | null>(null);
+  const bindingRef = useRef<MonacoBinding | null>(null);
 
- const groq = new Groq({
+  const groq = new Groq({
     apiKey: import.meta.env.VITE_GROQ_API_KEY,
     dangerouslyAllowBrowser: true
   });
+
+  // Function to handle editor mounting
+  const handleEditorDidMount = (editor: monaco.editor.IStandaloneCodeEditor) => {
+    editorRef.current = editor;
+    
+    if (ydocRef.current && activeFile) {
+      // Get or create a Y.Text for this file
+      const ytext = ydocRef.current.getText(`file-${activeFile.id}`);
+      
+      // If this is a new file, initialize it with content
+      if (ytext.toString() === '' && activeFile.content) {
+        ytext.insert(0, activeFile.content);
+      }
+      
+      // Create a new binding between Monaco and the Y.Text
+      const binding = new MonacoBinding(
+        ytext,
+        editor.getModel()!,
+        new Set([editor]),
+        providerRef.current!.awareness
+      );
+      
+      bindingRef.current = binding;
+      
+      // Set up awareness (cursor tracking)
+      providerRef.current!.awareness.setLocalStateField('user', {
+        name: username,
+        color: userColors[Math.floor(Math.random() * userColors.length)]
+      });
+    }
+  };
 
   useEffect(() => {
     if (!roomId || !username) return;
@@ -74,9 +134,41 @@ function App() {
     const socket = getSocket();
     setIsLoading(true);
 
+    // Create a new Y.Doc instance
     const doc = new Y.Doc();
-    const provider = new WebrtcProvider(`collaborative-editor-${roomId}`, doc);
-    const type = doc.getText('monaco');
+    ydocRef.current = doc;
+    
+    // Create a WebRTC provider
+    const provider = new WebrtcProvider(`collaborative-editor-${roomId}`, doc, {
+      signaling: ['wss://signaling.yjs.dev']
+    });
+    providerRef.current = provider;
+
+    // Listen for file sharing events
+    socket.on('file-shared', (sharedFile: FileNode) => {
+      setFiles(prevFiles => {
+        // Check if file already exists
+        const fileExists = findFileById(prevFiles, sharedFile.id);
+        if (fileExists) return prevFiles;
+        
+        // Add the new file
+        return [...prevFiles, sharedFile];
+      });
+    });
+
+    // Listen for user awareness updates
+    provider.awareness.on('change', () => {
+      const states = Array.from(provider.awareness.getStates().entries());
+      const connectedUsers: User[] = states
+        .filter(([_, state]) => state.user)
+        .map(([clientId, state]) => ({
+          id: clientId.toString(),
+          username: state.user.name,
+          color: state.user.color
+        }));
+      
+      setUsers(connectedUsers);
+    });
 
     socket.emit('join-room', { roomId, username });
 
@@ -90,11 +182,64 @@ function App() {
     });
 
     return () => {
-      provider.destroy();
+      if (bindingRef.current) {
+        bindingRef.current.destroy();
+      }
+      
+      if (providerRef.current) {
+        providerRef.current.destroy();
+      }
+      
+      if (ydocRef.current) {
+        ydocRef.current.destroy();
+      }
+      
       socket.disconnect();
       setIsConnected(false);
     };
   }, [roomId, username]);
+
+  // Effect to update the editor binding when the active file changes
+  useEffect(() => {
+    if (!editorRef.current || !ydocRef.current || !providerRef.current || !activeFile) return;
+    
+    // Clean up previous binding
+    if (bindingRef.current) {
+      bindingRef.current.destroy();
+    }
+    
+    // Get or create a Y.Text for this file
+    const ytext = ydocRef.current.getText(`file-${activeFile.id}`);
+    
+    // If this is a new file, initialize it with content
+    if (ytext.toString() === '' && activeFile.content) {
+      ytext.insert(0, activeFile.content);
+    }
+    
+    // Create a new binding
+    const binding = new MonacoBinding(
+      ytext,
+      editorRef.current.getModel()!,
+      new Set([editorRef.current]),
+      providerRef.current.awareness
+    );
+    
+    bindingRef.current = binding;
+    
+  }, [activeFile]);
+
+  const findFileById = (fileArray: FileNode[], id: string): FileNode | null => {
+    for (const file of fileArray) {
+      if (file.id === id) return file;
+      
+      if (file.children) {
+        const found = findFileById(file.children, id);
+        if (found) return found;
+      }
+    }
+    
+    return null;
+  };
 
   const handleAskAI = useCallback(async (query: string) => {
     try {
@@ -143,6 +288,12 @@ function App() {
       };
 
       setFiles(updateFiles(files));
+    }
+    
+    // Share the new file with other users
+    const socket = getSocket();
+    if (socket && roomId) {
+      socket.emit('share-file', { roomId, file: newNode });
     }
   };
 
@@ -307,8 +458,33 @@ function App() {
             theme={isDarkMode ? 'vs-dark' : 'light'}
             value={code}
             onChange={(value) => setCode(value || '')}
+            onMount={handleEditorDidMount}
             className="neo-brutal-lg m-4"
+            options={{
+              minimap: { enabled: true },
+              scrollBeyondLastLine: false,
+              automaticLayout: true,
+              wordWrap: 'on'
+            }}
           />
+          
+          {/* Active users indicator */}
+          <div className="absolute top-20 right-4 z-10">
+            <div className="bg-white dark:bg-gray-800 p-2 rounded-lg shadow-md">
+              <h4 className="text-sm font-semibold mb-1">Active Editors</h4>
+              <div className="space-y-1">
+                {users.map(user => (
+                  <div key={user.id} className="flex items-center gap-2">
+                    <div 
+                      className="w-3 h-3 rounded-full" 
+                      style={{ backgroundColor: user.color }}
+                    />
+                    <span className="text-xs">{user.username}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
         </motion.div>
 
         <UserList

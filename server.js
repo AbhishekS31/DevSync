@@ -18,7 +18,8 @@ const generateRoomId = () => {
 };
 
 const rooms = new Map();
-const calls = new Map(); // Track active calls
+const calls = new Map();
+const sharedFiles = new Map();
 
 io.on('connection', (socket) => {
   console.log('A user connected');
@@ -27,12 +28,14 @@ io.on('connection', (socket) => {
     const roomId = generateRoomId();
     console.log(`Room created with ID: ${roomId}`);
     rooms.set(roomId, { users: [] });
+    sharedFiles.set(roomId, []);
     socket.emit('room-id', roomId);
   });
 
   socket.on('join-room', ({ roomId, username }) => {
     if (!rooms.has(roomId)) {
       rooms.set(roomId, { users: [] });
+      sharedFiles.set(roomId, []);
     }
 
     const room = rooms.get(roomId);
@@ -40,25 +43,41 @@ io.on('connection', (socket) => {
     room.users.push(user);
     socket.join(roomId);
 
+    // Send existing shared files to the new user
+    const files = sharedFiles.get(roomId) || [];
+    files.forEach(file => {
+      socket.emit('file-shared', file);
+    });
+
+    // Notify other users in the room
+    socket.to(roomId).emit('user-joined', { userId: socket.id });
     io.to(roomId).emit('users-update', room.users);
     console.log(`${username} (${socket.id}) joined room ${roomId}`);
   });
 
-  // Handle call events
-  socket.on('start-call', ({ userId, roomId }) => {
-    const call = {
-      from: socket.id,
-      to: userId,
-      roomId,
-      startTime: Date.now(),
-    };
-    calls.set(`${socket.id}-${userId}`, call);
-    io.to(roomId).emit('call-started', { userId, roomId });
+  // File sharing
+  socket.on('share-file', ({ roomId, file }) => {
+    if (!sharedFiles.has(roomId)) {
+      sharedFiles.set(roomId, []);
+    }
+    
+    const files = sharedFiles.get(roomId);
+    // Check if file already exists
+    const fileExists = files.some(f => f.id === file.id);
+    
+    if (!fileExists) {
+      files.push(file);
+      socket.to(roomId).emit('file-shared', file);
+      console.log(`File ${file.name} shared in room ${roomId}`);
+    }
   });
 
-  socket.on('end-call', ({ userId, roomId }) => {
-    calls.delete(`${socket.id}-${userId}`);
-    io.to(roomId).emit('call-ended', { userId, roomId });
+  // WebRTC signaling
+  socket.on('signal', ({ userId, signal }) => {
+    socket.to(userId).emit('user-signal', {
+      userId: socket.id,
+      signal
+    });
   });
 
   socket.on('disconnect', () => {

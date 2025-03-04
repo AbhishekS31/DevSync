@@ -32,6 +32,11 @@ export const connectSocket = () => {
       socket.on('call-ended', ({ userId, roomId }) => {
         console.log('Call ended:', { userId, roomId });
       });
+
+      // Add file sharing event handlers
+      socket.on('file-shared', (file) => {
+        console.log('File shared:', file);
+      });
     }
 
     if (!socket.connected) {

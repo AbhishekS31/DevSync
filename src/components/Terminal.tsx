@@ -5,6 +5,7 @@ import { WebLinksAddon } from 'xterm-addon-web-links';
 import { WebglAddon } from 'xterm-addon-webgl';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Maximize2, Minimize2, X, Play, Code2 } from 'lucide-react';
+import { Rnd } from 'react-rnd';
 import { runCode } from '../lib/codeRunner';
 import 'xterm/css/xterm.css';
 
@@ -24,6 +25,7 @@ export const Terminal: React.FC<TerminalProps> = ({ isVisible, onClose, currentC
   const [commandHistory, setCommandHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [selectedLanguage, setSelectedLanguage] = useState('python');
+  const [terminalSize, setTerminalSize] = useState({ width: '100%', height: 300 });
 
   useEffect(() => {
     if (!terminalRef.current || !isVisible) return;
@@ -218,68 +220,105 @@ export const Terminal: React.FC<TerminalProps> = ({ isVisible, onClose, currentC
     xtermRef.current.write('\r\n$ ');
   };
 
+  const handleResizeStop = (e: any, direction: any, ref: HTMLElement, delta: any) => {
+    setTerminalSize({
+      width: ref.style.width,
+      height: parseInt(ref.style.height)
+    });
+    
+    // Fit the terminal to the new size
+    if (fitAddonRef.current) {
+      setTimeout(() => {
+        fitAddonRef.current?.fit();
+      }, 0);
+    }
+  };
+
   return (
     <AnimatePresence mode="wait">
       {isVisible && (
-        <motion.div
-          key="terminal"
-          initial={{ y: 20, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          exit={{ y: 20, opacity: 0 }}
-          className={`fixed ${
-            isMaximized ? 'inset-0' : 'bottom-0 left-0 right-0 h-64'
-          } bg-[#1E1E1E] neo-brutal transition-all duration-300 z-50`}
+        <Rnd
+          default={{
+            x: 0,
+            y: window.innerHeight - 300,
+            width: '100%',
+            height: 300
+          }}
+          minHeight={200}
+          minWidth={400}
+          maxHeight={window.innerHeight - 100}
+          dragHandleClassName="terminal-drag-handle"
+          bounds="window"
+          onResizeStop={handleResizeStop}
+          style={{
+            position: 'fixed',
+            zIndex: 50,
+            display: 'flex',
+            flexDirection: 'column'
+          }}
+          disableDragging={isMaximized}
+          size={isMaximized ? { width: '100%', height: '100%' } : undefined}
+          position={isMaximized ? { x: 0, y: 0 } : undefined}
+          enableResizing={!isMaximized}
         >
-          <div className="flex justify-between items-center p-2 bg-[#2D2D2D] border-b border-gray-700">
-            <div className="flex items-center gap-4">
-              <span className="text-white font-mono">Terminal</span>
-              <div className="flex items-center gap-2 bg-[#1E1E1E] rounded px-2 py-1">
-                <Code2 className="w-4 h-4 text-white" />
-                <select
-                  value={selectedLanguage}
-                  onChange={(e) => setSelectedLanguage(e.target.value)}
-                  className="bg-transparent text-white text-sm outline-none"
+          <motion.div
+            key="terminal"
+            initial={{ y: 20, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 20, opacity: 0 }}
+            className="flex flex-col h-full bg-[#1E1E1E] neo-brutal"
+          >
+            <div className="flex justify-between items-center p-2 bg-[#2D2D2D] border-b border-gray-700 terminal-drag-handle cursor-move">
+              <div className="flex items-center gap-4">
+                <span className="text-white font-mono">Terminal</span>
+                <div className="flex items-center gap-2 bg-[#1E1E1E] rounded px-2 py-1">
+                  <Code2 className="w-4 h-4 text-white" />
+                  <select
+                    value={selectedLanguage}
+                    onChange={(e) => setSelectedLanguage(e.target.value)}
+                    className="bg-transparent text-white text-sm outline-none"
+                  >
+                    <option value="python">Python</option>
+                    <option value="javascript">JavaScript</option>
+                  </select>
+                </div>
+                <button
+                  onClick={handleRunCode}
+                  className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded neo-brutal"
                 >
-                  <option value="python">Python</option>
-                  <option value="javascript">JavaScript</option>
-                </select>
+                  <Play className="w-4 h-4" />
+                  <span className="text-sm">Run</span>
+                </button>
               </div>
-              <button
-                onClick={handleRunCode}
-                className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded neo-brutal"
-              >
-                <Play className="w-4 h-4" />
-                <span className="text-sm">Run</span>
-              </button>
+              <div className="flex gap-2">
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={() => setIsMaximized(!isMaximized)}
+                  className="p-1 hover:bg-gray-600 rounded"
+                >
+                  {isMaximized ? (
+                    <Minimize2 className="w-4 h-4 text-white" />
+                  ) : (
+                    <Maximize2 className="w-4 h-4 text-white" />
+                  )}
+                </motion.button>
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={onClose}
+                  className="p-1 hover:bg-gray-600 rounded"
+                >
+                  <X className="w-4 h-4 text-white" />
+                </motion.button>
+              </div>
             </div>
-            <div className="flex gap-2">
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={() => setIsMaximized(!isMaximized)}
-                className="p-1 hover:bg-gray-600 rounded"
-              >
-                {isMaximized ? (
-                  <Minimize2 className="w-4 h-4 text-white" />
-                ) : (
-                  <Maximize2 className="w-4 h-4 text-white" />
-                )}
-              </motion.button>
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={onClose}
-                className="p-1 hover:bg-gray-600 rounded"
-              >
-                <X className="w-4 h-4 text-white" />
-              </motion.button>
-            </div>
-          </div>
-          <div
-            ref={terminalRef}
-            className={`h-[calc(100%-40px)] ${isMaximized ? 'h-[calc(100vh-40px)]' : ''}`}
-          />
-        </motion.div>
+            <div
+              ref={terminalRef}
+              className="flex-1 overflow-hidden"
+            />
+          </motion.div>
+        </Rnd>
       )}
     </AnimatePresence>
   );
