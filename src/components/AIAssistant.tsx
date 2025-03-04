@@ -1,288 +1,218 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Bot, Loader, X, Minimize2, Maximize2, Send, Copy, Check, ChevronDown } from 'lucide-react';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { X, Send, Mic, MicOff, Minimize2, Maximize2 } from 'lucide-react';
+import SyntaxHighlighter from 'react-syntax-highlighter';
+import { atomOneDark } from 'react-syntax-highlighter/dist/esm/styles/hljs';
+import 'regenerator-runtime/runtime';
+import SpeechRecognition, { useSpeechRecognition } from 'react-speech-recognition';
 
 interface AIAssistantProps {
   onClose: () => void;
   aiResponse: string;
-  onAskAI: (query: string) => Promise<void>;
+  onAskAI: (query: string) => void;
 }
 
-interface Message {
-  type: 'user' | 'ai';
-  content: string;
-  codeBlocks?: Array<{
-    language: string;
-    code: string;
-  }>;
-}
-
-interface Model {
-  id: string;
-  name: string;
-  description: string;
-}
-
-export const AIAssistant: React.FC<AIAssistantProps> = ({ onClose, aiResponse, onAskAI }) => {
+export const AIAssistant: React.FC<AIAssistantProps> = ({
+  onClose,
+  aiResponse,
+  onAskAI,
+}) => {
+  const [query, setQuery] = useState('');
   const [isMinimized, setIsMinimized] = useState(false);
+  const [isListening, setIsListening] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [input, setInput] = useState('');
-  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
-  const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
-  const [selectedModel, setSelectedModel] = useState<Model>({
-    id: 'mixtral-8x7b-32768',
-    name: 'Mixtral 8x7B',
-    description: 'A powerful mixture-of-experts model with 8x7B parameters'
-  });
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const dropdownRef = useRef<HTMLDivElement>(null);
+  
+  const {
+    transcript,
+    listening,
+    resetTranscript,
+    browserSupportsSpeechRecognition
+  } = useSpeechRecognition();
 
-  const models: Model[] = [
-    {
-      id: 'mixtral-8x7b-32768',
-      name: 'Mixtral 8x7B',
-      description: 'A powerful mixture-of-experts model with 8x7B parameters'
-    },
-    {
-      id: 'llama3-70b-8192',
-      name: 'Llama 3 70B',
-      description: 'Meta\'s largest open source LLM with 70B parameters'
-    },
-    {
-      id: 'llama3-8b-8192',
-      name: 'Llama 3 8B',
-      description: 'Lightweight and efficient 8B parameter model'
-    },
-    {
-      id: 'gemma-7b-it',
-      name: 'Gemma 7B',
-      description: 'Google\'s lightweight and efficient 7B parameter model'
-    },
-    {
-      id: 'claude-3-opus-20240229',
-      name: 'Claude 3 Opus',
-      description: 'Anthropic\'s most powerful model for complex reasoning'
+  useEffect(() => {
+    if (transcript) {
+      setQuery(transcript);
     }
-  ];
+  }, [transcript]);
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [aiResponse]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  useEffect(() => {
-    if (aiResponse && messages.length > 0 && messages[messages.length - 1].type === 'user') {
-      const processedMessage = processAIResponse(aiResponse);
-      setMessages(prev => [...prev, processedMessage]);
-      setIsLoading(false);
-      scrollToBottom();
-    }
-  }, [aiResponse]);
-
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setIsModelDropdownOpen(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, []);
-
-  const processAIResponse = (response: string): Message => {
-    const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g;
-    const codeBlocks: Array<{ language: string; code: string }> = [];
-    let lastIndex = 0;
-    let content = '';
-
-    let match;
-    while ((match = codeBlockRegex.exec(response)) !== null) {
-      content += response.slice(lastIndex, match.index);
-      const language = match[1] || 'bash';
-      const code = match[2].trim();
-      codeBlocks.push({ language, code });
-      lastIndex = match.index + match[0].length;
-    }
-    content += response.slice(lastIndex);
-
-    return {
-      type: 'ai',
-      content: content.trim(),
-      codeBlocks
-    };
-  };
-
-  const handleCopyCode = (code: string, index: number) => {
-    navigator.clipboard.writeText(code);
-    setCopiedIndex(index);
-    setTimeout(() => setCopiedIndex(null), 2000);
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim()) return;
-
-    const userMessage = input.trim();
-    setInput('');
-    setMessages(prev => [...prev, { type: 'user', content: userMessage }]);
+    if (!query.trim()) return;
+    
     setIsLoading(true);
+    await onAskAI(query);
+    setIsLoading(false);
+    setQuery('');
+    resetTranscript();
+  };
 
-    try {
-      await onAskAI(userMessage);
-    } catch (error) {
-      setMessages(prev => [...prev, { type: 'ai', content: 'Error processing your request.' }]);
-      setIsLoading(false);
+  const toggleListening = () => {
+    if (listening) {
+      SpeechRecognition.stopListening();
+      setIsListening(false);
+    } else {
+      resetTranscript();
+      SpeechRecognition.startListening({ continuous: true });
+      setIsListening(true);
     }
   };
 
-  const handleModelSelect = (model: Model) => {
-    setSelectedModel(model);
-    setIsModelDropdownOpen(false);
+  const formatResponse = (response: string) => {
+    // Check if response contains code blocks
+    if (response.includes('```')) {
+      const parts = response.split(/```(\w+)?\n/);
+      return (
+        <>
+          {parts.map((part, index) => {
+            if (index % 3 === 0) {
+              // Text content
+              return <p key={index} className="mb-4 whitespace-pre-wrap">{part}</p>;
+            } else if (index % 3 === 1) {
+              // Language identifier
+              return null;
+            } else {
+              // Code block
+              const language = parts[index - 1] || 'javascript';
+              return (
+                <div key={index} className="mb-4 rounded overflow-hidden">
+                  <SyntaxHighlighter
+                    language={language}
+                    style={atomOneDark}
+                    className="rounded neo-brutal"
+                  >
+                    {part}
+                  </SyntaxHighlighter>
+                </div>
+              );
+            }
+          })}
+        </>
+      );
+    }
     
-    // Add a system message to indicate model change
-    setMessages(prev => [
-      ...prev, 
-      { 
-        type: 'ai', 
-        content: `Model switched to ${model.name}. How can I help you?` 
-      }
-    ]);
+    return <p className="whitespace-pre-wrap">{response}</p>;
   };
 
   return (
     <motion.div
-      initial={{ scale: 0.95, opacity: 0 }}
-      animate={{ scale: 1, opacity: 1 }}
-      exit={{ scale: 0.95, opacity: 0 }}
-      className={`fixed bottom-16 right-4 bg-white dark:bg-gray-900 neo-brutal rounded-lg overflow-hidden shadow-xl ${
-        isMinimized ? 'w-64 h-12' : 'w-[600px] h-[600px]'
-      } z-50`}
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: 20 }}
+      className={`fixed bottom-4 right-4 bg-white dark:bg-gray-900 neo-brutal rounded-lg overflow-hidden shadow-xl z-40 ${
+        isMinimized ? 'w-64 h-12' : 'w-96 h-[500px]'
+      }`}
     >
-      <div className="flex items-center justify-between p-3 border-b dark:border-gray-700">
-        <div className="flex items-center gap-2">
-          <Bot size={20} className="text-purple-500" />
-          <h3 className="font-semibold">AI Assistant</h3>
-          <div className="relative" ref={dropdownRef}>
-            <button
-              onClick={() => setIsModelDropdownOpen(!isModelDropdownOpen)}
-              className="flex items-center gap-1 text-xs bg-purple-100 dark:bg-purple-900 px-2 py-1 rounded-full"
-            >
-              {selectedModel.name}
-              <ChevronDown size={12} />
-            </button>
-            {isModelDropdownOpen && (
-              <div className="absolute top-full left-0 mt-1 w-64 bg-white dark:bg-gray-800 shadow-lg rounded-lg overflow-hidden z-50">
-                {models.map((model) => (
-                  <div
-                    key={model.id}
-                    className={`p-2 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer ${
-                      selectedModel.id === model.id ? 'bg-purple-100 dark:bg-purple-900' : ''
-                    }`}
-                    onClick={() => handleModelSelect(model)}
-                  >
-                    <div className="font-medium">{model.name}</div>
-                    <div className="text-xs text-gray-500 dark:text-gray-400">{model.description}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
+      <div className="flex items-center justify-between p-3 border-b dark:border-gray-700 bg-gradient-to-r from-blue-500 to-purple-500 text-white">
+        <h3 className="font-semibold">AI Assistant</h3>
         <div className="flex gap-2">
           <button
             onClick={() => setIsMinimized(!isMinimized)}
-            className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
+            className="p-1 hover:bg-white/20 rounded"
           >
             {isMinimized ? <Maximize2 size={16} /> : <Minimize2 size={16} />}
           </button>
           <button
             onClick={onClose}
-            className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
+            className="p-1 hover:bg-white/20 rounded"
           >
             <X size={16} />
           </button>
         </div>
       </div>
 
-      <AnimatePresence>
+      <AnimatePresence mode="wait">
         {!isMinimized && (
           <motion.div
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: 'auto' }}
             exit={{ opacity: 0, height: 0 }}
           >
-            <div className="h-[500px] overflow-y-auto p-4 space-y-4">
-              {messages.map((message, index) => (
+            <div className="h-[400px] overflow-y-auto p-4 space-y-4 bg-gray-50 dark:bg-gray-800">
+              {aiResponse ? (
                 <motion.div
-                  key={index}
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
-                  className={`p-3 rounded-lg ${
-                    message.type === 'ai'
-                      ? 'bg-purple-100 dark:bg-purple-900'
-                      : 'bg-gray-100 dark:bg-gray-800'
-                  }`}
+                  className="p-3 rounded-lg bg-white dark:bg-gray-700 shadow-sm"
                 >
-                  <div className="prose dark:prose-invert max-w-none">
-                    {message.content}
-                  </div>
-                  
-                  {message.codeBlocks?.map((block, blockIndex) => (
-                    <div key={blockIndex} className="mt-3 relative">
-                      <div className="absolute right-2 top-2 z-10">
-                        <button
-                          onClick={() => handleCopyCode(block.code, blockIndex)}
-                          className="p-1 bg-gray-800 text-white rounded hover:bg-gray-700"
-                        >
-                          {copiedIndex === blockIndex ? (
-                            <Check size={14} />
-                          ) : (
-                            <Copy size={14} />
-                          )}
-                        </button>
-                      </div>
-                      <SyntaxHighlighter
-                        language={block.language}
-                        style={vscDarkPlus}
-                        className="rounded-lg !mt-0"
-                      >
-                        {block.code}
-                      </SyntaxHighlighter>
-                    </div>
-                  ))}
+                  {formatResponse(aiResponse)}
                 </motion.div>
-              ))}
-              {isLoading && (
-                <div className="flex items-center gap-2 text-gray-500">
-                  <Loader className="animate-spin" size={16} />
-                  Thinking with {selectedModel.name}...
+              ) : (
+                <div className="flex flex-col items-center justify-center h-full text-center text-gray-500">
+                  <div className="w-16 h-16 mb-4 rounded-full bg-gradient-to-r from-blue-400 to-purple-400 flex items-center justify-center">
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="24"
+                      height="24"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="text-white"
+                    >
+                      <path d="M12 8V4H8"></path>
+                      <rect width="16" height="12" x="4" y="8" rx="2"></rect>
+                      <path d="M2 14h2"></path>
+                      <path d="M20 14h2"></path>
+                      <path d="M15 13v2"></path>
+                      <path d="M9 13v2"></path>
+                    </svg>
+                  </div>
+                  <p className="text-sm">Ask me anything about your code or programming concepts!</p>
+                  <p className="text-xs mt-2">Try: "How do I implement a binary search tree?"</p>
                 </div>
               )}
               <div ref={messagesEndRef} />
             </div>
 
-            <form onSubmit={handleSubmit} className="p-4 border-t dark:border-gray-700">
+            <form onSubmit={handleSubmit} className="p-3 border-t dark:border-gray-700 bg-white dark:bg-gray-900">
               <div className="flex gap-2">
                 <input
                   type="text"
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  placeholder={`Ask ${selectedModel.name} anything...`}
+                  value={query || transcript}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Ask the AI assistant..."
                   className="flex-1 p-2 neo-brutal bg-white dark:bg-gray-800 rounded"
                 />
+                {browserSupportsSpeechRecognition && (
+                  <button
+                    type="button"
+                    onClick={toggleListening}
+                    className={`p-2 neo-brutal rounded ${
+                      isListening ? 'bg-red-500 text-white' : 'bg-gray-200 dark:bg-gray-700'
+                    }`}
+                  >
+                    {isListening ? <MicOff size={16} /> : <Mic size={16} />}
+                  </button>
+                )}
                 <button
                   type="submit"
-                  className="p-2 neo-brutal bg-purple-500 text-white rounded hover:bg-purple-600"
                   disabled={isLoading}
+                  className="p-2 neo-brutal bg-gradient-to-r from-blue-500 to-purple-500 text-white rounded hover:opacity-90"
                 >
-                  <Send size={16} />
+                  {isLoading ? (
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                  ) : (
+                    <Send size={16} />
+                  )}
                 </button>
               </div>
+              {isListening && (
+                <div className="mt-2 text-xs text-gray-500 flex items-center">
+                  <div className="w-2 h-2 bg-red-500 rounded-full mr-2 animate-pulse"></div>
+                  Listening... {transcript ? `"${transcript}"` : ''}
+                </div>
+              )}
             </form>
           </motion.div>
         )}

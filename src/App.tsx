@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Editor from '@monaco-editor/react';
-import { Moon, Sun } from 'lucide-react';
+import { Moon, Sun, Share2, Users, Code2 } from 'lucide-react';
 import * as Y from 'yjs';
 import { WebrtcProvider } from 'y-webrtc';
 import { MonacoBinding } from 'y-monaco';
@@ -86,6 +86,8 @@ function App() {
   const [currentModel, setCurrentModel] = useState('mixtral-8x7b-32768');
   const [users, setUsers] = useState<User[]>([]);
   const [sharedFiles, setSharedFiles] = useState<FileNode[]>([]);
+  const [editorTheme, setEditorTheme] = useState('vs-dark');
+  const [showShareModal, setShowShareModal] = useState(false);
   
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const ydocRef = useRef<Y.Doc | null>(null);
@@ -339,11 +341,12 @@ function App() {
 
   const toggleTheme = () => {
     setIsDarkMode(!isDarkMode);
+    setEditorTheme(isDarkMode ? 'vs' : 'vs-dark');
     document.documentElement.classList.toggle('dark');
   };
 
   const handleCreateRoom = () => {
-    const newRoomId = uuidv4();
+    const newRoomId = uuidv4().substring(0, 8);
     setRoomId(newRoomId);
     setShowOnboarding(false);
   };
@@ -366,6 +369,12 @@ function App() {
     setCurrentModel(modelId);
   };
 
+  const handleShareRoom = () => {
+    navigator.clipboard.writeText(roomId);
+    setShowShareModal(true);
+    setTimeout(() => setShowShareModal(false), 3000);
+  };
+
   if (showOnboarding) {
     return (
       <OnboardingModal
@@ -378,14 +387,30 @@ function App() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-900 to-purple-900">
         <motion.div
           initial={{ scale: 0.9, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
-          className="text-center"
+          className="text-center text-white"
         >
-          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary mx-auto mb-4"></div>
-          <p className="text-lg">Connecting to room...</p>
+          <div className="relative w-24 h-24 mx-auto mb-8">
+            <motion.div 
+              className="absolute inset-0 rounded-full bg-blue-500 opacity-75"
+              animate={{ 
+                scale: [1, 1.2, 1],
+              }}
+              transition={{ 
+                duration: 2,
+                repeat: Infinity,
+                ease: "easeInOut" 
+              }}
+            />
+            <div className="absolute inset-0 flex items-center justify-center">
+              <Code2 size={40} className="text-white" />
+            </div>
+          </div>
+          <h2 className="text-2xl font-bold mb-2">Connecting to CodeCollab</h2>
+          <p className="text-lg text-blue-200">Establishing secure connection to room...</p>
         </motion.div>
       </div>
     );
@@ -400,18 +425,31 @@ function App() {
       <motion.header
         initial={{ y: -20, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
-        className="flex items-center justify-between p-4 border-b-2 border-black bg-white dark:bg-gray-900"
+        className="flex items-center justify-between p-4 border-b-2 border-black bg-gradient-to-r from-blue-600 to-purple-600 text-white"
       >
-        <h1 className="text-2xl font-bold">CodeCollab</h1>
+        <div className="flex items-center gap-3">
+          <Code2 size={28} className="text-white" />
+          <h1 className="text-2xl font-bold">CodeCollab</h1>
+        </div>
         <div className="flex items-center gap-4">
-          <div className="text-sm">
-            Room ID: <span className="font-mono">{roomId}</span>
+          <div className="flex items-center gap-2 bg-black/20 px-3 py-1.5 rounded-full">
+            <Users size={16} />
+            <span className="text-sm font-medium">{users.length} online</span>
+          </div>
+          <div className="flex items-center gap-2 bg-black/20 px-3 py-1.5 rounded-full">
+            <span className="text-sm font-mono">{roomId}</span>
+            <button 
+              onClick={handleShareRoom}
+              className="hover:bg-white/20 p-1 rounded-full transition-colors"
+            >
+              <Share2 size={14} />
+            </button>
           </div>
           <motion.button
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
             onClick={toggleTheme}
-            className="neo-brutal p-2 bg-yellow-300 dark:bg-blue-600"
+            className="neo-brutal p-2 bg-yellow-300 dark:bg-blue-600 text-black dark:text-white"
           >
             {isDarkMode ? <Sun size={24} /> : <Moon size={24} />}
           </motion.button>
@@ -448,29 +486,51 @@ function App() {
         </AnimatePresence>
 
         <motion.div
-          className="flex-1 flex flex-col"
+          className="flex-1 flex flex-col relative"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
         >
+          <div className="absolute top-0 left-0 right-0 z-10 bg-gray-100 dark:bg-gray-800 border-b border-gray-300 dark:border-gray-700 px-4 py-2 flex items-center">
+            {activeFile && (
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium">{activeFile.name}</span>
+                <span className="text-xs text-gray-500">
+                  {activeFile.name.split('.').pop()?.toUpperCase()}
+                </span>
+              </div>
+            )}
+          </div>
+          
           <Editor
             height="100%"
             defaultLanguage="typescript"
-            theme={isDarkMode ? 'vs-dark' : 'light'}
+            theme={editorTheme}
             value={code}
             onChange={(value) => setCode(value || '')}
             onMount={handleEditorDidMount}
-            className="neo-brutal-lg m-4"
+            className="neo-brutal-lg m-4 mt-12"
             options={{
               minimap: { enabled: true },
               scrollBeyondLastLine: false,
               automaticLayout: true,
-              wordWrap: 'on'
+              wordWrap: 'on',
+              fontFamily: "'Fira Code', monospace",
+              fontLigatures: true,
+              fontSize: 14,
+              lineHeight: 1.5,
+              cursorBlinking: 'smooth',
+              cursorSmoothCaretAnimation: 'on',
+              smoothScrolling: true,
+              renderLineHighlight: 'all',
+              renderWhitespace: 'selection',
+              bracketPairColorization: { enabled: true },
+              guides: { bracketPairs: true }
             }}
           />
           
           {/* Active users indicator */}
-          <div className="absolute top-20 right-4 z-10">
-            <div className="bg-white dark:bg-gray-800 p-2 rounded-lg shadow-md">
+          <div className="absolute top-14 right-4 z-10">
+            <div className="bg-white dark:bg-gray-800 p-2 rounded-lg shadow-md neo-brutal">
               <h4 className="text-sm font-semibold mb-1">Active Editors</h4>
               <div className="space-y-1">
                 {users.map(user => (
@@ -528,6 +588,25 @@ function App() {
               aiResponse={aiResponse}
               onAskAI={handleAskAI}
             />
+          )}
+        </AnimatePresence>
+
+        {/* Share Room Modal */}
+        <AnimatePresence>
+          {showShareModal && (
+            <motion.div
+              initial={{ opacity: 0, y: 50 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 50 }}
+              className="fixed bottom-8 left-1/2 transform -translate-x-1/2 bg-green-500 text-white px-4 py-3 rounded-lg shadow-lg z-50"
+            >
+              <div className="flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="20 6 9 17 4 12"></polyline>
+                </svg>
+                <span>Room ID copied to clipboard!</span>
+              </div>
+            </motion.div>
           )}
         </AnimatePresence>
       </div>

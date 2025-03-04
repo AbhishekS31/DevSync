@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Plus, File, Folder, ChevronDown, ChevronRight, MoreVertical } from 'lucide-react';
+import { Plus, File, Folder, ChevronDown, ChevronRight, MoreVertical, FileCode, FileText, FolderOpen } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { Button } from './ui/button';
 import {
   ContextMenu,
@@ -33,6 +34,29 @@ interface FileTreeNodeProps {
   level: number;
 }
 
+const getFileIcon = (fileName: string) => {
+  const extension = fileName.split('.').pop()?.toLowerCase();
+  
+  switch (extension) {
+    case 'js':
+    case 'jsx':
+      return <FileCode size={16} className="mr-2 text-yellow-500" />;
+    case 'ts':
+    case 'tsx':
+      return <FileCode size={16} className="mr-2 text-blue-500" />;
+    case 'css':
+      return <FileCode size={16} className="mr-2 text-purple-500" />;
+    case 'html':
+      return <FileCode size={16} className="mr-2 text-orange-500" />;
+    case 'json':
+      return <FileCode size={16} className="mr-2 text-green-500" />;
+    case 'md':
+      return <FileText size={16} className="mr-2 text-gray-500" />;
+    default:
+      return <File size={16} className="mr-2 text-gray-500" />;
+  }
+};
+
 const FileTreeNode: React.FC<FileTreeNodeProps> = ({
   node,
   onSelect,
@@ -44,6 +68,7 @@ const FileTreeNode: React.FC<FileTreeNodeProps> = ({
   const [isExpanded, setIsExpanded] = useState(true);
   const [isRenaming, setIsRenaming] = useState(false);
   const [newName, setNewName] = useState(node.name);
+  const [isHovered, setIsHovered] = useState(false);
 
   const handleRename = (e: React.FormEvent) => {
     e.preventDefault();
@@ -55,10 +80,15 @@ const FileTreeNode: React.FC<FileTreeNodeProps> = ({
     <div>
       <ContextMenu>
         <ContextMenuTrigger>
-          <div
-            className={`flex items-center px-2 py-1 hover:bg-gray-100 dark:hover:bg-gray-800 cursor-pointer`}
+          <motion.div
+            className={`flex items-center px-2 py-1.5 rounded-md ${
+              isHovered ? 'bg-gray-100 dark:bg-gray-800' : ''
+            } cursor-pointer transition-colors duration-150`}
             style={{ paddingLeft: `${level * 12}px` }}
             onClick={() => node.type === 'file' ? onSelect(node) : setIsExpanded(!isExpanded)}
+            onMouseEnter={() => setIsHovered(true)}
+            onMouseLeave={() => setIsHovered(false)}
+            whileHover={{ x: 2 }}
           >
             {node.type === 'folder' && (
               <button className="p-1">
@@ -66,9 +96,13 @@ const FileTreeNode: React.FC<FileTreeNodeProps> = ({
               </button>
             )}
             {node.type === 'folder' ? (
-              <Folder size={16} className="mr-2 text-blue-500" />
+              isExpanded ? (
+                <FolderOpen size={16} className="mr-2 text-blue-500" />
+              ) : (
+                <Folder size={16} className="mr-2 text-blue-500" />
+              )
             ) : (
-              <File size={16} className="mr-2 text-gray-500" />
+              getFileIcon(node.name)
             )}
             {isRenaming ? (
               <form onSubmit={handleRename} className="flex-1">
@@ -82,9 +116,9 @@ const FileTreeNode: React.FC<FileTreeNodeProps> = ({
                 />
               </form>
             ) : (
-              <span className="flex-1">{node.name}</span>
+              <span className="flex-1 text-sm">{node.name}</span>
             )}
-          </div>
+          </motion.div>
         </ContextMenuTrigger>
         <ContextMenuContent>
           {node.type === 'folder' && (
@@ -105,21 +139,28 @@ const FileTreeNode: React.FC<FileTreeNodeProps> = ({
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
-      {node.type === 'folder' && isExpanded && node.children && (
-        <div>
-          {node.children.map((child) => (
-            <FileTreeNode
-              key={child.id}
-              node={child}
-              onSelect={onSelect}
-              onFileCreate={onFileCreate}
-              onFileDelete={onFileDelete}
-              onFileRename={onFileRename}
-              level={level + 1}
-            />
-          ))}
-        </div>
-      )}
+      <AnimatePresence>
+        {node.type === 'folder' && isExpanded && node.children && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.2 }}
+          >
+            {node.children.map((child) => (
+              <FileTreeNode
+                key={child.id}
+                node={child}
+                onSelect={onSelect}
+                onFileCreate={onFileCreate}
+                onFileDelete={onFileDelete}
+                onFileRename={onFileRename}
+                level={level + 1}
+              />
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };
@@ -131,19 +172,111 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
   onFileDelete,
   onFileRename,
 }) => {
+  const [isCreatingFile, setIsCreatingFile] = useState(false);
+  const [isCreatingFolder, setIsCreatingFolder] = useState(false);
+  const [newItemName, setNewItemName] = useState('');
+
+  const handleCreateFile = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newItemName.trim()) {
+      onFileCreate(null, newItemName, 'file');
+      setNewItemName('');
+      setIsCreatingFile(false);
+    }
+  };
+
+  const handleCreateFolder = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newItemName.trim()) {
+      onFileCreate(null, newItemName, 'folder');
+      setNewItemName('');
+      setIsCreatingFolder(false);
+    }
+  };
+
   return (
     <div className="w-64 bg-white dark:bg-gray-900 border-r-2 border-black p-2">
-      <div className="flex justify-between items-center mb-2 px-2">
+      <div className="flex justify-between items-center mb-4 px-2 py-2 bg-gradient-to-r from-blue-500 to-purple-500 text-white rounded-md">
         <span className="font-bold">Explorer</span>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => onFileCreate(null, 'New File', 'file')}
-        >
-          <Plus size={16} />
-        </Button>
+        <div className="flex gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setIsCreatingFile(true);
+              setIsCreatingFolder(false);
+            }}
+            className="hover:bg-white/20 text-white"
+          >
+            <File size={16} />
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setIsCreatingFolder(true);
+              setIsCreatingFile(false);
+            }}
+            className="hover:bg-white/20 text-white"
+          >
+            <Folder size={16} />
+          </Button>
+        </div>
       </div>
-      <div className="space-y-1">
+
+      <AnimatePresence>
+        {isCreatingFile && (
+          <motion.form
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            onSubmit={handleCreateFile}
+            className="mb-2 px-2"
+          >
+            <div className="flex">
+              <input
+                type="text"
+                value={newItemName}
+                onChange={(e) => setNewItemName(e.target.value)}
+                placeholder="File name"
+                className="flex-1 p-1 text-sm neo-brutal bg-white dark:bg-gray-800 rounded"
+                autoFocus
+                onBlur={() => setIsCreatingFile(false)}
+              />
+              <Button type="submit" size="sm" className="ml-1 neo-brutal">
+                Add
+              </Button>
+            </div>
+          </motion.form>
+        )}
+
+        {isCreatingFolder && (
+          <motion.form
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            onSubmit={handleCreateFolder}
+            className="mb-2 px-2"
+          >
+            <div className="flex">
+              <input
+                type="text"
+                value={newItemName}
+                onChange={(e) => setNewItemName(e.target.value)}
+                placeholder="Folder name"
+                className="flex-1 p-1 text-sm neo-brutal bg-white dark:bg-gray-800 rounded"
+                autoFocus
+                onBlur={() => setIsCreatingFolder(false)}
+              />
+              <Button type="submit" size="sm" className="ml-1 neo-brutal">
+                Add
+              </Button>
+            </div>
+          </motion.form>
+        )}
+      </AnimatePresence>
+
+      <div className="space-y-1 mt-2">
         {files.map((file) => (
           <FileTreeNode
             key={file.id}
