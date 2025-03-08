@@ -429,7 +429,7 @@ function App() {
       >
         <div className="flex items-center gap-3">
           <Code2 size={28} className="text-white" />
-          <h1 className="text-2xl font-bold">CodeCollab</h1>
+          <h1 className="text-2xl font-bold">DevSync 🚀</h1>
         </div>
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2 bg-black/20 px-3 py-1.5 rounded-full">
@@ -601,7 +601,7 @@ function App() {
               className="fixed bottom-8 left-1/2 transform -translate-x-1/2 bg-green-500 text-white px-4 py-3 rounded-lg shadow-lg z-50"
             >
               <div className="flex items-center gap-2">
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <svg xmlns="http://www.w3.org/2000/svg" width="29" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <polyline points="20 6 9 17 4 12"></polyline>
                 </svg>
                 <span>Room ID copied to clipboard!</span>

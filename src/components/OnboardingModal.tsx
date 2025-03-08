@@ -155,7 +155,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
               exit={{ opacity: 0, x: 20 }}
               className="text-white"
             >
-              <h1 className="text-3xl font-bold mb-2 text-center bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">CodeCollab</h1>
+              <h1 className="text-3xl font-bold mb-2 text-center bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">DevSync 🚀</h1>
               <p className="text-center text-white/70 mb-6">Real-time collaborative coding environment</p>
               
               <form onSubmit={handleSubmitUsername} className="space-y-4">

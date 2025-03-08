@@ -1,9 +1,9 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Camera, Mic, MicOff, PhoneOff, Video, VideoOff, X } from 'lucide-react';
+import { DyteMeeting } from '@dytesdk/react-ui-kit';
+import { DyteProvider, useDyteClient } from '@dytesdk/react-web-core';
 import { Button } from './ui/button';
-import { initVideoCall } from '../lib/zegoCloud';
-import type { ZegoUIKitPrebuilt } from '@zegocloud/zego-uikit-prebuilt';
 
 interface VideoCallProps {
   roomId: string;
@@ -20,16 +20,13 @@ export const VideoCall: React.FC<VideoCallProps> = ({
   isVisible,
   onClose,
 }) => {
-  const videoContainerRef = useRef<HTMLDivElement>(null);
-  const [isMuted, setIsMuted] = useState(false);
-  const [isVideoEnabled, setIsVideoEnabled] = useState(true);
   const [isMinimized, setIsMinimized] = useState(false);
   const [isConnecting, setIsConnecting] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [zegoInstance, setZegoInstance] = useState<ZegoUIKitPrebuilt | null>(null);
+  const [meeting, setMeeting] = useState<any>(null);
 
   useEffect(() => {
-    if (!isVisible || !videoContainerRef.current) return;
+    if (!isVisible) return;
 
     let cleanup = false;
 
@@ -38,16 +35,60 @@ export const VideoCall: React.FC<VideoCallProps> = ({
         setIsConnecting(true);
         setError(null);
 
-        const zp = await initVideoCall(
-          videoContainerRef.current!,
-          roomId,
-          userId,
-          username,
-          'Host'
-        );
+        // Create a new meeting
+        const response = await fetch('https://api.dyte.io/v2/meetings', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Basic ${btoa(import.meta.env.VITE_DYTE_ORG_ID + ':' + import.meta.env.VITE_DYTE_API_KEY)}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            title: `Room ${roomId}`,
+            preferred_region: 'ap-south-1',
+            record_on_start: false,
+          }),
+        });
+
+        const meetingData = await response.json();
+        if (!meetingData.success) {
+          throw new Error('Failed to create meeting');
+        }
+
+        const meetingId = meetingData.data.id;
+
+        // Add participant
+        const participantResponse = await fetch(`https://api.dyte.io/v2/meetings/${meetingId}/participants`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Basic ${btoa(import.meta.env.VITE_DYTE_ORG_ID + ':' + import.meta.env.VITE_DYTE_API_KEY)}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            name: username,
+            client_specific_id: userId,
+            preset_name: 'group_call_participant',
+          }),
+        });
+
+        const participantData = await participantResponse.json();
+        if (!participantData.success) {
+          throw new Error('Failed to add participant');
+        }
+
+        const authToken = participantData.data.authToken;
+
+        // Initialize DyteClient
+        const dyteClient = await DyteClient.init({
+          authToken,
+          defaults: {
+            audio: true,
+            video: true,
+          },
+        });
 
         if (!cleanup) {
-          setZegoInstance(zp);
+          setMeeting(dyteClient);
+          await dyteClient.joinRoom();
         }
       } catch (err: any) {
         if (!cleanup) {
@@ -65,25 +106,24 @@ export const VideoCall: React.FC<VideoCallProps> = ({
 
     return () => {
       cleanup = true;
-      if (zegoInstance) {
-        zegoInstance.destroy();
-        setZegoInstance(null);
+      if (meeting) {
+        meeting.leaveRoom();
       }
     };
   }, [isVisible, roomId, userId, username]);
 
-  const handleEndCall = () => {
-    if (zegoInstance) {
-      zegoInstance.destroy();
-      setZegoInstance(null);
+  const handleEndCall = async () => {
+    if (meeting) {
+      await meeting.leaveRoom();
     }
+    setMeeting(null);
     onClose();
   };
 
   if (!isVisible) return null;
 
   return (
-    <AnimatePresence>
+    <DyteProvider value={meeting}>
       <motion.div
         initial={{ scale: 0.95, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
@@ -131,12 +171,13 @@ export const VideoCall: React.FC<VideoCallProps> = ({
                 </Button>
               </div>
             </div>
-          ) : (
-            <div 
-              ref={videoContainerRef}
-              className="w-full h-full"
+          ) : meeting ? (
+            <DyteMeeting
+              meeting={meeting}
+              mode="fill"
+              showSetupScreen={false}
             />
-          )}
+          ) : null}
         </div>
 
         <motion.div
@@ -154,6 +195,6 @@ export const VideoCall: React.FC<VideoCallProps> = ({
           </Button>
         </motion.div>
       </motion.div>
-    </AnimatePresence>
+    </DyteProvider>
   );
 };

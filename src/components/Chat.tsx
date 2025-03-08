@@ -68,7 +68,7 @@ export const Chat: React.FC<ChatProps> = ({ roomId, username }) => {
         x: 0
       }}
       className={`fixed bottom-4 right-4 bg-white dark:bg-gray-900 neo-brutal rounded-lg overflow-hidden shadow-xl z-40 ${
-        isMinimized ? 'w-64 h-12' : 'w-96 h-[500px]'
+        isMinimized ? 'w-64 h-12' : 'w-96 h-[515px]'
       }`}
     >
       <div className="flex items-center justify-between p-3 border-b dark:border-gray-700 bg-gradient-to-r from-blue-500 to-purple-500 text-white">
