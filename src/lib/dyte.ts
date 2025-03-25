@@ -1,88 +1,123 @@
-import { useDyteClient, DyteClientParams } from '@dytesdk/react-web-core';
-
 let dyteClient: any | null = null;
+
+/**
+ * Dyte API integration for video calls
+ */
+
+// Dyte API credentials should be in your environment variables
+const DYTE_ORG_ID = import.meta.env.VITE_DYTE_ORG_ID;
+const DYTE_API_KEY = import.meta.env.VITE_DYTE_API_KEY;
 
 interface CreateMeetingResponse {
   success: boolean;
   data: {
     id: string;
     title: string;
+    roomName: string;
   };
 }
 
 interface AddParticipantResponse {
   success: boolean;
   data: {
+    id: string;
+    name: string;
+    clientSpecificId: string;
     authToken: string;
   };
 }
 
+/**
+ * Creates a new Dyte meeting
+ */
 export const createMeeting = async (title: string): Promise<string> => {
-  const response = await fetch('https://api.dyte.io/v2/meetings', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Basic ${btoa(import.meta.env.VITE_DYTE_ORG_ID + ':' + import.meta.env.VITE_DYTE_API_KEY)}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      title,
-      preferred_region: 'ap-south-1',
-      record_on_start: false,
-    }),
-  });
+  try {
+    const response = await fetch('https://api.dyte.io/v2/meetings', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Basic ${btoa(DYTE_ORG_ID + ':' + DYTE_API_KEY)}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        title,
+        preferred_region: 'ap-south-1',
+        record_on_start: false,
+      }),
+    });
 
-  const data: CreateMeetingResponse = await response.json();
-  if (!data.success) {
-    throw new Error('Failed to create meeting');
+    const meetingData: CreateMeetingResponse = await response.json();
+    
+    if (!meetingData.success) {
+      throw new Error('Failed to create meeting');
+    }
+
+    return meetingData.data.id;
+  } catch (error) {
+    console.error('Error creating Dyte meeting:', error);
+    throw error;
   }
-
-  return data.data.id;
 };
 
+/**
+ * Adds a participant to an existing Dyte meeting
+ */
 export const addParticipant = async (
   meetingId: string,
-  clientId: string,
-  name: string
+  name: string,
+  userId: string,
+  presetName: string = 'group_call_participant'
 ): Promise<string> => {
-  const response = await fetch(`https://api.dyte.io/v2/meetings/${meetingId}/participants`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Basic ${btoa(import.meta.env.VITE_DYTE_ORG_ID + ':' + import.meta.env.VITE_DYTE_API_KEY)}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      name,
-      client_specific_id: clientId,
-      preset_name: 'group_call_participant',
-    }),
-  });
+  try {
+    const response = await fetch(`https://api.dyte.io/v2/meetings/${meetingId}/participants`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Basic ${btoa(DYTE_ORG_ID + ':' + DYTE_API_KEY)}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        name,
+        client_specific_id: userId,
+        preset_name: presetName,
+      }),
+    });
 
-  const data: AddParticipantResponse = await response.json();
-  if (!data.success) {
-    throw new Error('Failed to add participant');
+    const participantData: AddParticipantResponse = await response.json();
+    
+    if (!participantData.success) {
+      throw new Error('Failed to add participant');
+    }
+
+    return participantData.data.authToken;
+  } catch (error) {
+    console.error('Error adding Dyte participant:', error);
+    throw error;
   }
-
-  return data.data.authToken;
 };
 
-export const initDyteClient = async (authToken: string): Promise<any> => {
+/**
+ * Initialize a Dyte meeting and join as a participant
+ */
+export const initializeDyteMeeting = async (
+  meetingId: string,
+  userName: string,
+  userId: string
+): Promise<any> => {
   try {
-    // Request permissions first
-    await requestMediaPermissions();
-
-    if (!dyteClient) {
-      // Replace DyteClient.init() with useDyteClient hook if applicable
-      dyteClient = useDyteClient({
-        authToken,
-        defaults: {
-          audio: true,
-          video: true,
-        },
-      } as DyteClientParams & { authToken: string });
-    }
+    // Add participant to the meeting
+    const authToken = await addParticipant(meetingId, userName, userId);
+    
+    // Initialize DyteClient with the auth token
+    const dyteClient = await (window as any).DyteClient.init({
+      authToken,
+      defaults: {
+        audio: true,
+        video: true,
+      },
+    });
+    
     return dyteClient;
   } catch (error) {
-    console.error('Failed to initialize Dyte client:', error);
+    console.error('Failed to initialize Dyte meeting:', error);
     throw error;
   }
 };
@@ -96,19 +131,19 @@ const requestMediaPermissions = async (): Promise<void> => {
   }
 };
 
-export const joinMeeting = async (meetingId: string, clientId: string, name: string): Promise<any> => {
-  try {
-    // Get auth token for the participant
-    const authToken = await addParticipant(meetingId, clientId, name);
-    
-    // Initialize and return the Dyte client
-    const meeting = await initDyteClient(authToken);
-    await meeting.joinRoom();
-    return meeting;
-  } catch (error) {
-    console.error('Failed to join meeting:', error);
-    throw error;
-  }
+/**
+ * Initialize the Dyte client with an auth token
+ */
+const initDyteClient = async (authToken: string): Promise<any> => {
+  dyteClient = await (window as any).DyteClient.init({
+    authToken,
+    defaults: {
+      audio: true,
+      video: true,
+    },
+  });
+  
+  return dyteClient;
 };
 
 export const leaveMeeting = async (): Promise<void> => {

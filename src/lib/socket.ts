@@ -13,7 +13,7 @@ export const connectSocket = () => {
       });
 
       socket.on('connect', () => {
-        console.log('Socket connected');
+        console.log('Socket connected with ID:', socket?.id);
       });
 
       socket.on('connect_error', (err: Error) => {

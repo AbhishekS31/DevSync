@@ -146,6 +146,45 @@ function App() {
     });
     providerRef.current = provider;
 
+    // Listen for initial file system state from server
+    socket.on('initial-file-system', (initialFiles: FileNode[]) => {
+      if (initialFiles && initialFiles.length > 0) {
+        setFiles(initialFiles);
+      }
+    });
+
+    // Listen for file system updates
+    socket.on('fs-update', (updatedFiles: FileNode[]) => {
+      setFiles(updatedFiles);
+    });
+
+    // Listen for file content updates
+    socket.on('file-content-updated', ({ fileId, content }) => {
+      setFiles(prevFiles => {
+        const updateContentInFiles = (nodes: FileNode[]): FileNode[] => {
+          return nodes.map(node => {
+            if (node.id === fileId) {
+              return { ...node, content };
+            }
+            if (node.children) {
+              return {
+                ...node,
+                children: updateContentInFiles(node.children)
+              };
+            }
+            return node;
+          });
+        };
+        
+        return updateContentInFiles(prevFiles);
+      });
+      
+      // If this is the currently active file, update the code
+      if (activeFile && activeFile.id === fileId) {
+        setCode(content);
+      }
+    });
+
     // Listen for file sharing events
     socket.on('file-shared', (sharedFile: FileNode) => {
       setFiles(prevFiles => {
@@ -173,6 +212,7 @@ function App() {
     });
 
     socket.emit('join-room', { roomId, username });
+    socket.emit('fs-update', { roomId, files });
 
     socket.on('connect', () => {
       setIsConnected(true);
@@ -198,26 +238,27 @@ function App() {
       
       socket.disconnect();
       setIsConnected(false);
+      
+      socket.off('initial-file-system');
+      socket.off('fs-update');
+      socket.off('file-content-updated');
+      socket.off('file-shared');
     };
   }, [roomId, username]);
 
   // Effect to update the editor binding when the active file changes
   useEffect(() => {
     if (!editorRef.current || !ydocRef.current || !providerRef.current || !activeFile) return;
-    
     // Clean up previous binding
     if (bindingRef.current) {
       bindingRef.current.destroy();
     }
-    
     // Get or create a Y.Text for this file
     const ytext = ydocRef.current.getText(`file-${activeFile.id}`);
-    
     // If this is a new file, initialize it with content
     if (ytext.toString() === '' && activeFile.content) {
       ytext.insert(0, activeFile.content);
     }
-    
     // Create a new binding
     const binding = new MonacoBinding(
       ytext,
@@ -225,40 +266,53 @@ function App() {
       new Set([editorRef.current]),
       providerRef.current.awareness
     );
-    
     bindingRef.current = binding;
-    
+      
   }, [activeFile]);
 
   const findFileById = (fileArray: FileNode[], id: string): FileNode | null => {
     for (const file of fileArray) {
       if (file.id === id) return file;
-      
       if (file.children) {
         const found = findFileById(file.children, id);
         if (found) return found;
       }
     }
-    
     return null;
   };
 
   const handleAskAI = useCallback(async (query: string) => {
     try {
-      const completion = await groq.chat.completions.create({
-        messages: [{ role: 'user', content: query }],
-        model: currentModel,
-        temperature: 0.7,
-        max_tokens: 1024,
+      // Create a new headers object
+      const headers = new Headers({
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${import.meta.env.VITE_GROQ_API_KEY}`
       });
 
-      const response = completion.choices[0]?.message?.content || 'No response from AI';
-      setAiResponse(response);
+      // Make a direct fetch call to the Groq API
+      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: headers,
+        body: JSON.stringify({
+          model: currentModel,
+          messages: [{ role: 'user', content: query }],
+          temperature: 0.7,
+          max_tokens: 1024,
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`API error: ${response.status} ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      const aiText = data.choices?.[0]?.message?.content || 'No response from AI';
+      setAiResponse(aiText);
     } catch (error) {
       console.error('Error from AI:', error);
       setAiResponse('Sorry, there was an error processing your request.');
     }
-  }, [groq, currentModel]);
+  }, [currentModel]);
 
   const handleFileCreate = (parentId: string | null, name: string, type: 'file' | 'folder') => {
     const newNode: FileNode = {
@@ -291,7 +345,7 @@ function App() {
 
       setFiles(updateFiles(files));
     }
-    
+
     // Share the new file with other users
     const socket = getSocket();
     if (socket && roomId) {
@@ -310,7 +364,14 @@ function App() {
       });
     };
 
-    setFiles(deleteFromFiles(files));
+    const updatedFiles = deleteFromFiles(files);
+    setFiles(updatedFiles);
+
+    // Sync the delete with other users
+    const socket = getSocket();
+    if (socket && roomId) {
+      socket.emit('file-delete', { roomId, fileId: id });
+    }
   };
 
   const handleFileRename = (id: string, newName: string) => {
@@ -330,6 +391,12 @@ function App() {
     };
 
     setFiles(renameInFiles(files));
+
+    // Sync the rename with other users
+    const socket = getSocket();
+    if (socket && roomId) {
+      socket.emit('file-rename', { roomId, fileId: id, newName });
+    }
   };
 
   const handleFileSelect = (file: FileNode) => {
@@ -373,6 +440,43 @@ function App() {
     navigator.clipboard.writeText(roomId);
     setShowShareModal(true);
     setTimeout(() => setShowShareModal(false), 3000);
+  };
+
+  const handleCodeChange = (value: string | undefined) => {
+    const newValue = value || '';
+    setCode(newValue);
+    
+    // Update the file content in the file system
+    if (activeFile) {
+      setFiles(prevFiles => {
+        const updateContentInFiles = (nodes: FileNode[]): FileNode[] => {
+          return nodes.map(node => {
+            if (node.id === activeFile.id) {
+              return { ...node, content: newValue };
+            }
+            if (node.children) {
+              return {
+                ...node,
+                children: updateContentInFiles(node.children)
+              };
+            }
+            return node;
+          });
+        };
+        
+        return updateContentInFiles(prevFiles);
+      });
+      
+      // Sync the content with other users
+      const socket = getSocket();
+      if (socket && roomId) {
+        socket.emit('file-update-content', {
+          roomId, 
+          fileId: activeFile.id, 
+          content: newValue
+        });
+      }
+    }
   };
 
   if (showOnboarding) {
@@ -455,7 +559,6 @@ function App() {
           </motion.button>
         </div>
       </motion.header>
-
       <div className="flex h-[calc(100vh-73px)]">
         <Navbar
           activeTab={activeTab}
@@ -506,7 +609,7 @@ function App() {
             defaultLanguage="typescript"
             theme={editorTheme}
             value={code}
-            onChange={(value) => setCode(value || '')}
+            onChange={handleCodeChange}
             onMount={handleEditorDidMount}
             className="neo-brutal-lg m-4 mt-12"
             options={{
@@ -519,96 +622,95 @@ function App() {
               fontSize: 14,
               lineHeight: 1.5,
               cursorBlinking: 'smooth',
-              cursorSmoothCaretAnimation: 'on',
               smoothScrolling: true,
-              renderLineHighlight: 'all',
+              cursorSmoothCaretAnimation: 'on',
               renderWhitespace: 'selection',
+              renderLineHighlight: 'all',
               bracketPairColorization: { enabled: true },
               guides: { bracketPairs: true }
             }}
           />
-          
-          {/* Active users indicator */}
-          <div className="absolute top-14 right-4 z-10">
-            <div className="bg-white dark:bg-gray-800 p-2 rounded-lg shadow-md neo-brutal">
-              <h4 className="text-sm font-semibold mb-1">Active Editors</h4>
-              <div className="space-y-1">
-                {users.map(user => (
-                  <div key={user.id} className="flex items-center gap-2">
-                    <div 
-                      className="w-3 h-3 rounded-full" 
-                      style={{ backgroundColor: user.color }}
-                    />
-                    <span className="text-xs">{user.username}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
         </motion.div>
 
+        {/* Add UserList component here */}
         <UserList
           roomId={roomId}
           onVideoCall={handleVideoCall}
           onVoiceCall={handleVoiceCall}
         />
+      </div>
 
-        <AnimatePresence>
-          {isChatOpen && (
-            <Chat roomId={roomId} username={username} />
-          )}
-        </AnimatePresence>
+      <AnimatePresence>
+        {isTerminalOpen && (
+          <Terminal
+            isVisible={isTerminalOpen}
+            onClose={() => setIsTerminalOpen(false)}
+            currentCode={code}
+          />
+        )}
+      </AnimatePresence>
 
-        <AnimatePresence>
-          {isTerminalOpen && (
-            <Terminal
-              isVisible={isTerminalOpen}
-              onClose={() => setIsTerminalOpen(false)}
-              currentCode={code}
-            />
-          )}
-        </AnimatePresence>
+      <AnimatePresence>
+        {isVideoCallOpen && (
+          <VideoCall
+            roomId={roomId}
+            username={username}
+            isVisible={isVideoCallOpen}
+            onClose={() => setIsVideoCallOpen(false)}
+          />
+        )}
+      </AnimatePresence>
 
-        <AnimatePresence>
-          {isVideoCallOpen && (
-            <VideoCall
-              roomId={roomId}
-              userId={username}
-              username={username}
-              isVisible={isVideoCallOpen}
-              onClose={() => setIsVideoCallOpen(false)}
-            />
-          )}
-        </AnimatePresence>
+      <AnimatePresence>
+        {isChatOpen && (
+          <Chat roomId={roomId} username={username} />
+        )}
+      </AnimatePresence>
 
-        <AnimatePresence>
-          {isAIOpen && (
-            <AIAssistant
-              onClose={() => setIsAIOpen(false)}
-              aiResponse={aiResponse}
-              onAskAI={handleAskAI}
-            />
-          )}
-        </AnimatePresence>
+      <AnimatePresence>
+        {isAIOpen && (
+          <AIAssistant
+            onAskAI={handleAskAI}
+            aiResponse={aiResponse}
+            onClose={() => setIsAIOpen(false)}
+          />
+        )}
+      </AnimatePresence>
 
-        {/* Share Room Modal */}
-        <AnimatePresence>
-          {showShareModal && (
-            <motion.div
-              initial={{ opacity: 0, y: 50 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 50 }}
-              className="fixed bottom-8 left-1/2 transform -translate-x-1/2 bg-green-500 text-white px-4 py-3 rounded-lg shadow-lg z-50"
-            >
-              <div className="flex items-center gap-2">
-                <svg xmlns="http://www.w3.org/2000/svg" width="29" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="20 6 9 17 4 12"></polyline>
-                </svg>
-                <span>Room ID copied to clipboard!</span>
+      <AnimatePresence>
+        {showShareModal && (
+          <motion.div
+            initial={{ opacity: 0, y: 50 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 50 }}
+            className="fixed bottom-8 left-1/2 transform -translate-x-1/2 bg-green-500 text-white px-4 py-3 rounded-lg shadow-lg z-50"
+          >
+            <div className="flex items-center gap-2">
+              <svg xmlns="http://www.w3.org/2000/svg" width="29" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="20 6 9 17 4 12"></polyline>
+              </svg>
+              <span>Room ID copied to clipboard!</span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <div className="absolute top-14 right-4 z-10">
+        {/* Active users indicator */}
+        <div className="bg-white dark:bg-gray-800 p-2 rounded-lg shadow-md neo-brutal">
+          <h4 className="text-sm font-semibold mb-1">Active Editors</h4>
+          <div className="space-y-1">
+            {users.map(user => (
+              <div key={user.id} className="flex items-center gap-2">
+                <div 
+                  className="w-3 h-3 rounded-full" 
+                  style={{ backgroundColor: user.color }}
+                />
+                <span className="text-xs">{user.username}</span>
               </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+            ))}
+          </div>
+        </div>
       </div>
     </motion.div>
   );

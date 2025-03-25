@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { X, Send, Mic, MicOff, Minimize2, Maximize2, Bot, Sparkles } from 'lucide-react';
 import SyntaxHighlighter from 'react-syntax-highlighter';
 import { atomOneDark } from 'react-syntax-highlighter/dist/esm/styles/hljs';
+import { getSocket } from '../lib/socket';
 
 interface AIAssistantProps {
   onClose: () => void;
@@ -12,9 +13,9 @@ interface AIAssistantProps {
 
 const AI_MODELS = [
   { id: 'mixtral-8x7b-32768', name: 'Mixtral 8x7B', description: 'Powerful open-source model' },
-  { id: 'llama2-70b-4096', name: 'LLaMA2 70B', description: 'High-performance model' },
-  { id: 'claude-2.1', name: 'Claude 2.1', description: 'Advanced reasoning' },
-  { id: 'gpt-4', name: 'GPT-4', description: 'Latest GPT model' }
+  { id: 'llama3-70b-8192', name: 'LLaMA3 70B', description: 'High-performance model' },
+  { id: 'llama2-70b-4096', name: 'LLaMA2 70B', description: 'Advanced reasoning' },
+  { id: 'gemma-7b-it', name: 'Gemma 7B', description: 'Google\'s lightweight model' }
 ];
 
 export const AIAssistant: React.FC<AIAssistantProps> = ({
@@ -29,13 +30,21 @@ export const AIAssistant: React.FC<AIAssistantProps> = ({
   const [transcript, setTranscript] = useState('');
   const [selectedModel, setSelectedModel] = useState('mixtral-8x7b-32768');
   const [showModelSelector, setShowModelSelector] = useState(false);
+  const [localAiResponse, setLocalAiResponse] = useState('');
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
   const browserSupportsSpeechRecognition = 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window;
   
   useEffect(() => {
-    scrollToBottom();
+    if (aiResponse) {
+      setLocalAiResponse(aiResponse);
+    }
   }, [aiResponse]);
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [localAiResponse]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -46,10 +55,34 @@ export const AIAssistant: React.FC<AIAssistantProps> = ({
     if (!query.trim()) return;
     
     setIsLoading(true);
-    await onAskAI(query);
-    setIsLoading(false);
-    setQuery('');
-    setTranscript('');
+    setLocalAiResponse(''); // Clear previous response
+    setErrorMessage(null); // Clear error message
+    
+    try {
+      // Use socket to make the API request through the server
+      const socket = getSocket();
+      if (!socket) {
+        throw new Error('Socket connection not available');
+      }
+      
+      socket.emit('ask-ai', { query, model: selectedModel }, (response: any) => {
+        if (response.success) {
+          setLocalAiResponse(response.data);
+        } else {
+          setErrorMessage(response.error || 'Failed to get response from AI');
+          setLocalAiResponse('Sorry, there was an error processing your request.');
+        }
+        setIsLoading(false);
+      });
+      
+      setQuery('');
+      setTranscript('');
+    } catch (error) {
+      console.error("Error asking AI:", error);
+      setLocalAiResponse("Sorry, there was an error processing your request. Please try again.");
+      setErrorMessage(error instanceof Error ? error.message : 'Unknown error occurred');
+      setIsLoading(false);
+    }
   };
 
   const toggleListening = () => {
@@ -108,6 +141,8 @@ export const AIAssistant: React.FC<AIAssistantProps> = ({
   };
 
   const formatResponse = (response: string) => {
+    if (!response) return null;
+    
     if (response.includes('```')) {
       const parts = response.split(/```(\w+)?\n/);
       return (
@@ -138,6 +173,23 @@ export const AIAssistant: React.FC<AIAssistantProps> = ({
     
     return <p className="whitespace-pre-wrap">{response}</p>;
   };
+
+  const startSpeakingAI = () => {
+    const scriptTag = document.createElement('script');
+    scriptTag.src = 'https://elevenlabs.io/convai-widget/index.js';
+    scriptTag.async = true;
+    document.body.appendChild(scriptTag);
+
+    const convaiElement = document.createElement('elevenlabs-convai');
+    convaiElement.setAttribute('agent-id', 'SzWuI5pMD0pa4N7Leb7d');
+    document.body.appendChild(convaiElement);
+  };
+
+  useEffect(() => {
+    if (isListening) {
+      startSpeakingAI();
+    }
+  }, [isListening]);
 
   return (
     <motion.div
@@ -222,13 +274,23 @@ export const AIAssistant: React.FC<AIAssistantProps> = ({
             exit={{ opacity: 0, height: 0 }}
           >
             <div className="h-[400px] overflow-y-auto p-4 space-y-4 bg-gray-50 dark:bg-gray-800">
-              {aiResponse ? (
+              {errorMessage && (
+                <motion.div
+                  initial={{ opacity: 0, y: -10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="p-3 rounded-lg bg-red-100 dark:bg-red-900/30 border border-red-300 dark:border-red-900 text-red-800 dark:text-red-300"
+                >
+                  <p className="text-sm font-medium">Error: {errorMessage}</p>
+                </motion.div>
+              )}
+              
+              {localAiResponse ? (
                 <motion.div
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   className="p-3 rounded-lg bg-white dark:bg-gray-700 shadow-sm"
                 >
-                  {formatResponse(aiResponse)}
+                  {formatResponse(localAiResponse)}
                 </motion.div>
               ) : (
                 <div className="flex flex-col items-center justify-center h-full text-center text-gray-500">

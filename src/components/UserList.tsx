@@ -1,9 +1,20 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Video, VideoOff, Users, Mic, MicOff, Camera, X } from 'lucide-react';
+import { Video, VideoOff, Users, Mic, MicOff, Camera, X, PhoneCall } from 'lucide-react';
 import { getSocket } from '../lib/socket';
-import { DyteMeeting } from '@dytesdk/react-ui-kit';
-import { DyteProvider, useDyteClient } from '@dytesdk/react-web-core';
+import {
+  initializeLocalStream,
+  createPeerConnection,
+  startVideoCall,
+  endCallWithUser,
+  endVideoCall,
+  toggleAudio,
+  toggleVideo,
+  setupVideoCallListeners,
+  getLocalStream,
+  getRemoteStream,
+  isCallActiveWithUser
+} from '../lib/webrtc';
 
 interface User {
   id: string;
@@ -19,143 +30,210 @@ interface UserListProps {
   onVoiceCall: (userId: string) => void;
 }
 
-export const UserList: React.FC<UserListProps> = ({ roomId }) => {
+export const UserList: React.FC<UserListProps> = ({ 
+  roomId,
+  onVideoCall,
+  onVoiceCall
+}) => {
   const [users, setUsers] = useState<User[]>([]);
-  const [activeCall, setActiveCall] = useState<{
-    userId: string;
-    meeting: any;
-    isMinimized: boolean;
-  } | null>(null);
+  const [activeUserCall, setActiveUserCall] = useState<string | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isAudioEnabled, setIsAudioEnabled] = useState(true);
   const [isVideoEnabled, setIsVideoEnabled] = useState(true);
+  const [hasRemoteStream, setHasRemoteStream] = useState(false);
+  const [currentUserId, setCurrentUserId] = useState<string>('');
+  
+  const localVideoRefs = useRef<Map<string, HTMLVideoElement>>(new Map());
+  const remoteVideoRefs = useRef<Map<string, HTMLVideoElement>>(new Map());
+  
   const socket = getSocket();
 
+  // Get the current user's ID from the socket
+  useEffect(() => {
+    if (socket && socket.id) {
+      setCurrentUserId(socket.id);
+    }
+  }, [socket]);
+
+  // Set up WebRTC event listeners
   useEffect(() => {
     if (!socket || !roomId) return;
 
+    // Set up WebRTC listeners
+    setupVideoCallListeners();
+
+    // Get user list from the server
     socket.on('users-update', (updatedUsers: User[]) => {
       setUsers(updatedUsers);
     });
 
+    // Listen for remote stream events
+    const handleRemoteStream = (event: Event) => {
+      const customEvent = event as CustomEvent;
+      if (customEvent.detail && customEvent.detail.stream && customEvent.detail.userId) {
+        const { userId, stream } = customEvent.detail;
+        
+        console.log('Received remote stream from user:', userId);
+        setActiveUserCall(userId);
+        setHasRemoteStream(true);
+        
+        // Update the remote video element
+        const videoElement = remoteVideoRefs.current.get(userId);
+        if (videoElement) {
+          videoElement.srcObject = stream;
+          videoElement.play().catch(err => {
+            console.error("Error playing remote video:", err);
+          });
+        }
+      }
+    };
+
+    // Listen for video call accepted events
+    const handleVideoCallAccepted = (event: Event) => {
+      const customEvent = event as CustomEvent;
+      if (customEvent.detail && customEvent.detail.userId) {
+        console.log('Video call accepted by user:', customEvent.detail.userId);
+      }
+    };
+
+    // Listen for remote stream ended events
+    const handleRemoteStreamEnded = (event: Event) => {
+      const customEvent = event as CustomEvent;
+      if (customEvent.detail && customEvent.detail.userId) {
+        const { userId } = customEvent.detail;
+        
+        if (activeUserCall === userId) {
+          setActiveUserCall(null);
+          setHasRemoteStream(false);
+        }
+      }
+    };
+
+    // Listen for call ended events
+    const handleCallEnded = () => {
+      setActiveUserCall(null);
+      setHasRemoteStream(false);
+    };
+
+    window.addEventListener('remote-stream-ready', handleRemoteStream);
+    window.addEventListener('remote-stream-ended', handleRemoteStreamEnded);
+    window.addEventListener('call-ended', handleCallEnded);
+    window.addEventListener('video-call-accepted', handleVideoCallAccepted);
+
     return () => {
       socket.off('users-update');
-      if (activeCall?.meeting) {
-        activeCall.meeting.leaveRoom();
-      }
+      window.removeEventListener('remote-stream-ready', handleRemoteStream);
+      window.removeEventListener('remote-stream-ended', handleRemoteStreamEnded);
+      window.removeEventListener('call-ended', handleCallEnded);
+      window.removeEventListener('video-call-accepted', handleVideoCallAccepted);
+      endVideoCall();
     };
   }, [roomId]);
 
-  const handleVideoClick = async (userId: string, username: string) => {
-    try {
-      if (activeCall?.userId === userId) {
-        // End the call if clicking on the same user
-        activeCall.meeting.leaveRoom();
-        setActiveCall(null);
-        return;
+  // Update video elements when active call changes
+  useEffect(() => {
+    if (activeUserCall) {
+      // Check if we need to update the remote video element
+      const remoteStream = getRemoteStream(activeUserCall);
+      const remoteVideoElement = remoteVideoRefs.current.get(activeUserCall);
+      
+      if (remoteStream && remoteVideoElement && !remoteVideoElement.srcObject) {
+        remoteVideoElement.srcObject = remoteStream;
+        remoteVideoElement.play().catch(err => {
+          console.error("Error playing remote video:", err);
+        });
       }
+    }
+  }, [activeUserCall]);
 
-      setIsConnecting(true);
-      setError(null);
-
-      // Create a new meeting
-      const response = await fetch('https://api.dyte.io/v2/meetings', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Basic ${btoa(import.meta.env.VITE_DYTE_ORG_ID + ':' + import.meta.env.VITE_DYTE_API_KEY)}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          title: `Room ${roomId}-${userId}`,
-          preferred_region: 'ap-south-1',
-          record_on_start: false,
-        }),
-      });
-
-      const meetingData = await response.json();
-      if (!meetingData.success) {
-        throw new Error('Failed to create meeting');
+  // Reference callback for local video elements
+  const localVideoRef = (userId: string) => (element: HTMLVideoElement | null) => {
+    if (element) {
+      localVideoRefs.current.set(userId, element);
+      
+      // If we have a local stream, set it as the srcObject
+      const localStream = getLocalStream();
+      if (localStream && !element.srcObject) {
+        element.srcObject = localStream;
+        element.play().catch(err => {
+          console.error("Error playing local video:", err);
+        });
       }
+    }
+  };
 
-      const meetingId = meetingData.data.id;
-
-      // Add participant
-      const participantResponse = await fetch(`https://api.dyte.io/v2/meetings/${meetingId}/participants`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Basic ${btoa(import.meta.env.VITE_DYTE_ORG_ID + ':' + import.meta.env.VITE_DYTE_API_KEY)}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          name: username,
-          client_specific_id: userId,
-          preset_name: 'group_call_participant',
-        }),
-      });
-
-      const participantData = await participantResponse.json();
-      if (!participantData.success) {
-        throw new Error('Failed to add participant');
+  // Reference callback for remote video elements
+  const remoteVideoRef = (userId: string) => (element: HTMLVideoElement | null) => {
+    if (element) {
+      remoteVideoRefs.current.set(userId, element);
+      
+      // If we have a remote stream for this user, set it as the srcObject
+      const remoteStream = getRemoteStream(userId);
+      if (remoteStream && !element.srcObject) {
+        element.srcObject = remoteStream;
+        element.play().catch(err => {
+          console.error("Error playing remote video:", err);
+        });
       }
-
-      const authToken = participantData.data.authToken;
-
-      // Initialize DyteClient
-      const meeting = await DyteClient.init({
-        authToken,
-        defaults: {
-          audio: true,
-          video: true,
-        },
-      });
-
-      await meeting.joinRoom();
-      setActiveCall({ userId, meeting, isMinimized: false });
-      setIsAudioEnabled(true);
-      setIsVideoEnabled(true);
-    } catch (error) {
-      console.error('Video call error:', error);
-      setError(error.message || 'Failed to start video call');
-    } finally {
-      setIsConnecting(false);
     }
   };
 
   const handleEndCall = async () => {
-    if (activeCall?.meeting) {
-      await activeCall.meeting.leaveRoom();
-      setActiveCall(null);
+    if (activeUserCall) {
+      await endCallWithUser(activeUserCall);
+      setActiveUserCall(null);
+      setHasRemoteStream(false);
     }
   };
 
-  const handleToggleVideo = async () => {
-    if (activeCall?.meeting) {
-      const newState = !isVideoEnabled;
-      if (newState) {
-        await activeCall.meeting.video.enable();
-      } else {
-        await activeCall.meeting.video.disable();
+  const handleToggleVideo = () => {
+    const newState = !isVideoEnabled;
+    toggleVideo(newState);
+    setIsVideoEnabled(newState);
+  };
+
+  const handleToggleAudio = () => {
+    const newState = !isAudioEnabled;
+    toggleAudio(newState);
+    setIsAudioEnabled(newState);
+  };
+
+  const handleStartCall = async (userId: string, username: string) => {
+    try {
+      // Don't start a call if one is already active
+      if (activeUserCall) {
+        setError('Already in a call. End the current call first.');
+        return;
       }
-      setIsVideoEnabled(newState);
-    }
-  };
-
-  const handleToggleAudio = async () => {
-    if (activeCall?.meeting) {
-      const newState = !isAudioEnabled;
-      if (newState) {
-        await activeCall.meeting.audio.enable();
-      } else {
-        await activeCall.meeting.audio.disable();
+      
+      setIsConnecting(true);
+      setError(null);
+      
+      // Initialize local media
+      const localStream = await initializeLocalStream(true, true);
+      
+      // Update the local video element
+      const localVideoElement = localVideoRefs.current.get(currentUserId);
+      if (localVideoElement) {
+        localVideoElement.srcObject = localStream;
+        localVideoElement.play().catch(err => {
+          console.error("Error playing local video:", err);
+        });
       }
-      setIsAudioEnabled(newState);
-    }
-  };
-
-  const handleToggleMinimize = () => {
-    if (activeCall) {
-      setActiveCall({ ...activeCall, isMinimized: !activeCall.isMinimized });
+      
+      // Start broadcasting to all users in the room
+      await startVideoCall(roomId, currentUserId);
+      
+      setActiveUserCall(currentUserId); // Set ourselves as the active call
+      setIsAudioEnabled(true);
+      setIsVideoEnabled(true);
+      setIsConnecting(false);
+    } catch (error: any) {
+      console.error('Error creating call:', error);
+      setError(error.message || 'Failed to start call');
+      setIsConnecting(false);
+      setActiveUserCall(null);
     }
   };
 
@@ -170,35 +248,40 @@ export const UserList: React.FC<UserListProps> = ({ roomId }) => {
       'bg-red-500',
       'bg-teal-500'
     ];
-    
+
     const index = username.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0) % colors.length;
     return colors[index];
   };
 
+  // Determine if this user is the current user (using the socket ID)
+  const isCurrentUser = (userId: string) => {
+    return userId === currentUserId;
+  };
+
   return (
-    <>
-      <div className="w-72 bg-white dark:bg-gray-900 border-l-2 border-black p-2">
-        <div className="flex items-center justify-between mb-4 px-2 py-2 bg-gradient-to-r from-blue-500 to-purple-500 text-white rounded-md">
-          <div className="flex items-center gap-2">
-            <Users size={18} />
-            <h3 className="font-bold">Team Members</h3>
-          </div>
-          <div className="bg-white/20 px-2 py-0.5 rounded-full text-sm">
-            {users.length} online
-          </div>
+    <div className="w-72 bg-white dark:bg-gray-900 border-l-2 border-black p-2">
+      <div className="flex items-center justify-between mb-4 px-2 py-2 bg-gradient-to-r from-blue-500 to-purple-500 text-white rounded-md">
+        <div className="flex items-center gap-2">
+          <Users size={18} />
+          <h3 className="font-bold">Team Members</h3>
         </div>
-        
-        <div className="space-y-4">
-          <AnimatePresence>
-            {users.map((user) => (
-              <motion.div
-                key={user.id}
-                layout
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -20 }}
-                className="neo-brutal bg-white dark:bg-gray-800 p-3 rounded-lg overflow-hidden"
-              >
+        <div className="bg-white/20 px-2 py-0.5 rounded-full text-sm">
+          {users.length} online
+        </div>
+      </div>
+
+      <div className="space-y-4">
+        <AnimatePresence>
+          {users.map((user) => (
+            <motion.div
+              key={user.id}
+              layout
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              className="neo-brutal bg-white dark:bg-gray-800 rounded-lg overflow-hidden"
+            >
+              <div className="p-3">
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-3">
                     <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white ${getRandomColor(user.username)}`}>
@@ -209,119 +292,123 @@ export const UserList: React.FC<UserListProps> = ({ roomId }) => {
                       <div className="flex items-center gap-1">
                         <div className="w-2 h-2 rounded-full bg-green-500"></div>
                         <span className="text-xs text-gray-500">Online</span>
+                        {isCurrentUser(user.id) && <span className="ml-1 text-xs text-blue-500">(You)</span>}
                       </div>
                     </div>
                   </div>
-                  <div className="flex gap-2">
+                  {/* Only show call button for the current user */}
+                  {isCurrentUser(user.id) && (
                     <motion.button
                       whileHover={{ scale: 1.1 }}
                       whileTap={{ scale: 0.9 }}
-                      onClick={() => handleVideoClick(user.id, user.username)}
+                      onClick={() => handleStartCall(user.id, user.username)}
                       className={`p-1.5 ${
-                        activeCall?.userId === user.id ? 'bg-red-500' : 'bg-blue-500'
-                      } text-white rounded neo-brutal`}
+                        activeUserCall === user.id 
+                          ? 'bg-green-500 hover:bg-green-600' 
+                          : 'bg-blue-500 hover:bg-blue-600'
+                      } text-white rounded-full flex items-center justify-center`}
+                      disabled={isConnecting || (activeUserCall !== null && activeUserCall !== user.id)}
                     >
-                      {activeCall?.userId === user.id ? (
-                        <VideoOff size={14} />
-                      ) : (
-                        <Video size={14} />
-                      )}
+                      <PhoneCall size={16} />
                     </motion.button>
-                  </div>
+                  )}
                 </div>
-              </motion.div>
-            ))}
-          </AnimatePresence>
-        </div>
-      </div>
-
-      <AnimatePresence>
-        {activeCall && (
-          <motion.div
-            initial={{ x: '100%', opacity: 0 }}
-            animate={{ 
-              x: 0, 
-              opacity: 1,
-              height: activeCall.isMinimized ? '120px' : '400px',
-              width: activeCall.isMinimized ? '300px' : '400px'
-            }}
-            exit={{ x: '100%', opacity: 0 }}
-            transition={{ type: 'spring', damping: 20 }}
-            className={`fixed right-4 bottom-4 bg-gray-900 rounded-lg overflow-hidden shadow-xl neo-brutal z-50`}
-          >
-            <div className="flex items-center justify-between p-3 bg-gray-800 border-b border-gray-700">
-              <h3 className="text-white font-medium">Video Call</h3>
-              <div className="flex gap-2">
-                <button
-                  onClick={handleToggleMinimize}
-                  className="p-1.5 hover:bg-gray-700 rounded-md text-gray-300"
-                >
-                  {activeCall.isMinimized ? <Camera size={16} /> : <VideoOff size={16} />}
-                </button>
-                <button
-                  onClick={handleEndCall}
-                  className="p-1.5 hover:bg-gray-700 rounded-md text-gray-300"
-                >
-                  <X size={16} />
-                </button>
               </div>
-            </div>
 
-            <DyteProvider value={activeCall.meeting}>
-              {isConnecting ? (
-                <div className="flex items-center justify-center h-full">
-                  <div className="text-center text-white">
-                    <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-white mx-auto mb-2"></div>
-                    <p className="text-sm">Connecting...</p>
-                  </div>
-                </div>
-              ) : error ? (
-                <div className="flex items-center justify-center h-full">
-                  <div className="text-center text-white">
-                    <p className="text-red-400 text-sm mb-2">{error}</p>
-                    <button
-                      onClick={() => setError(null)}
-                      className="px-3 py-1 bg-gray-700 rounded-md text-sm hover:bg-gray-600"
-                    >
-                      Retry
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="relative h-full">
-                  <DyteMeeting
-                    meeting={activeCall.meeting}
-                    mode="fill"
-                    showSetupScreen={false}
-                  />
-                  <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 flex gap-4 z-10">
-                    <motion.button
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                      onClick={handleToggleAudio}
-                      className={`p-2 rounded-full ${
-                        isAudioEnabled ? 'bg-blue-500' : 'bg-red-500'
-                      } text-white neo-brutal`}
-                    >
-                      {isAudioEnabled ? <Mic size={20} /> : <MicOff size={20} />}
-                    </motion.button>
-                    <motion.button
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                      onClick={handleToggleVideo}
-                      className={`p-2 rounded-full ${
-                        isVideoEnabled ? 'bg-blue-500' : 'bg-red-500'
-                      } text-white neo-brutal`}
-                    >
-                      {isVideoEnabled ? <Camera size={20} /> : <VideoOff size={20} />}
-                    </motion.button>
-                  </div>
-                </div>
-              )}
-            </DyteProvider>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </>
+              {/* Expandable video call section */}
+              <AnimatePresence>
+                {activeUserCall !== null && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.3 }}
+                    className="bg-gray-900 relative overflow-hidden"
+                  >
+                    {isConnecting ? (
+                      <div className="flex items-center justify-center h-36 p-2">
+                        <div className="text-center text-white">
+                          <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-white mx-auto mb-2"></div>
+                          <p className="text-sm">Connecting...</p>
+                        </div>
+                      </div>
+                    ) : error ? (
+                      <div className="flex items-center justify-center h-24 p-2">
+                        <div className="text-center text-white">
+                          <p className="text-red-400 text-sm mb-2">{error}</p>
+                          <button
+                            onClick={() => setError(null)}
+                            className="px-3 py-1 bg-gray-700 rounded-md text-sm hover:bg-gray-600"
+                          >
+                            Dismiss
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="relative h-64">
+                        {/* Show local video in the main container */}
+                        <div className="w-full h-full flex items-center justify-center bg-gray-800">
+                          {isVideoEnabled ? (
+                            <video
+                              ref={localVideoRef(currentUserId)}
+                              autoPlay
+                              playsInline
+                              muted
+                              className="w-full h-full object-cover"
+                            />
+                          ) : (
+                            <div className="flex items-center justify-center h-full">
+                              <VideoOff size={40} className="text-white/70" />
+                              <p className="text-white text-sm ml-2">Camera is off</p>
+                            </div>
+                          )}
+                        </div>
+                        
+                        {/* Status indicator for active call */}
+                        <div className="absolute top-2 left-2 bg-green-500 px-2 py-1 rounded text-xs text-white">
+                          Your video is being shared
+                        </div>
+                        
+                        {/* Controls */}
+                        <div className="absolute bottom-2 left-1/2 transform -translate-x-1/2 flex gap-2 z-10">
+                          <motion.button
+                            whileHover={{ scale: 1.05 }}
+                            whileTap={{ scale: 0.95 }}
+                            onClick={handleToggleAudio}
+                            className={`p-2 rounded-full ${
+                              isAudioEnabled ? 'bg-blue-500' : 'bg-red-500'
+                            } text-white neo-brutal`}
+                          >
+                            {isAudioEnabled ? <Mic size={14} /> : <MicOff size={14} />}
+                          </motion.button>
+                          <motion.button
+                            whileHover={{ scale: 1.05 }}
+                            whileTap={{ scale: 0.95 }}
+                            onClick={handleToggleVideo}
+                            className={`p-2 rounded-full ${
+                              isVideoEnabled ? 'bg-blue-500' : 'bg-red-500'
+                            } text-white neo-brutal`}
+                          >
+                            {isVideoEnabled ? <Camera size={14} /> : <VideoOff size={14} />}
+                          </motion.button>
+                          <motion.button
+                            whileHover={{ scale: 1.05 }}
+                            whileTap={{ scale: 0.95 }}
+                            onClick={handleEndCall}
+                            className="p-2 rounded-full bg-red-500 text-white neo-brutal"
+                          >
+                            <X size={14} />
+                          </motion.button>
+                        </div>
+                      </div>
+                    )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </motion.div>
+          ))}
+        </AnimatePresence>
+      </div>
+    </div>
   );
 };

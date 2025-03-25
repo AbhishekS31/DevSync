@@ -1,8 +1,8 @@
+@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@300;400;500;600;700&display=swap');
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-/* Import Fira Code for code editor */
-@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@300;400;500;600;700&display=swap');
+
 @layer base {
   :root {
     --background: 0 0% 100%;
@@ -58,8 +58,6 @@
     @apply bg-background text-foreground;
   }
 }
-
-
 
 .neo-brutal {
   @apply border-2 border-black shadow-brutal transition-all duration-200 hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none active:translate-x-[4px] active:translate-y-[4px] active:shadow-none;
