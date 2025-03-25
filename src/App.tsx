@@ -282,37 +282,16 @@ function App() {
   };
 
   const handleAskAI = useCallback(async (query: string) => {
+    // This function now just updates the state in App.tsx
+    // The actual API call is handled directly in the AIAssistant component
     try {
-      // Create a new headers object
-      const headers = new Headers({
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${import.meta.env.VITE_GROQ_API_KEY}`
-      });
-
-      // Make a direct fetch call to the Groq API
-      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: headers,
-        body: JSON.stringify({
-          model: currentModel,
-          messages: [{ role: 'user', content: query }],
-          temperature: 0.7,
-          max_tokens: 1024,
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error(`API error: ${response.status} ${response.statusText}`);
-      }
-
-      const data = await response.json();
-      const aiText = data.choices?.[0]?.message?.content || 'No response from AI';
-      setAiResponse(aiText);
+      // Just for keeping track of the last query in the parent component
+      console.log('AI query from parent component:', query);
+      // We don't need to do anything here since the component handles the call directly
     } catch (error) {
-      console.error('Error from AI:', error);
-      setAiResponse('Sorry, there was an error processing your request.');
+      console.error('Error in handleAskAI:', error);
     }
-  }, [currentModel]);
+  }, []);
 
   const handleFileCreate = (parentId: string | null, name: string, type: 'file' | 'folder') => {
     const newNode: FileNode = {

@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { X, Send, Mic, MicOff, Minimize2, Maximize2, Bot, Sparkles } from 'lucide-react';
 import SyntaxHighlighter from 'react-syntax-highlighter';
 import { atomOneDark } from 'react-syntax-highlighter/dist/esm/styles/hljs';
-import { getSocket } from '../lib/socket';
+import { queryGroq, validateApiKey } from '../lib/ai';
 
 interface AIAssistantProps {
   onClose: () => void;
@@ -30,59 +30,105 @@ export const AIAssistant: React.FC<AIAssistantProps> = ({
   const [transcript, setTranscript] = useState('');
   const [selectedModel, setSelectedModel] = useState('mixtral-8x7b-32768');
   const [showModelSelector, setShowModelSelector] = useState(false);
-  const [localAiResponse, setLocalAiResponse] = useState('');
+  const [localResponse, setLocalResponse] = useState('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [apiKeyValid, setApiKeyValid] = useState<boolean | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
   const browserSupportsSpeechRecognition = 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window;
   
+  // Update local response when parent provides a response
   useEffect(() => {
     if (aiResponse) {
-      setLocalAiResponse(aiResponse);
+      setLocalResponse(aiResponse);
     }
   }, [aiResponse]);
 
+  // Auto-scroll to bottom when response changes
   useEffect(() => {
     scrollToBottom();
-  }, [localAiResponse]);
+  }, [localResponse]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
+  // Check API key validity on component mount
+  useEffect(() => {
+    async function checkApiKey() {
+      const isValid = await validateApiKey();
+      setApiKeyValid(isValid);
+      
+      if (!isValid) {
+        setErrorMessage('API key validation failed. Please update your Groq API key in the .env file and restart the application.');
+      }
+    }
+    
+    checkApiKey();
+  }, []);
+
+  // Handle form submission
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!query.trim()) return;
+    if (!query.trim() || isLoading) return;
     
     setIsLoading(true);
-    setLocalAiResponse(''); // Clear previous response
-    setErrorMessage(null); // Clear error message
+    setErrorMessage(null);
     
     try {
-      // Use socket to make the API request through the server
-      const socket = getSocket();
-      if (!socket) {
-        throw new Error('Socket connection not available');
+      // Direct API call without going through parent component
+      const result = await queryGroq(query, selectedModel);
+      
+      if (result.success && result.data) {
+        setLocalResponse(result.data);
+        // Also update parent state if needed
+        onAskAI(query);
+      } else {
+        throw new Error(result.error || 'Failed to get response');
       }
-      
-      socket.emit('ask-ai', { query, model: selectedModel }, (response: any) => {
-        if (response.success) {
-          setLocalAiResponse(response.data);
-        } else {
-          setErrorMessage(response.error || 'Failed to get response from AI');
-          setLocalAiResponse('Sorry, there was an error processing your request.');
-        }
-        setIsLoading(false);
-      });
-      
+    } catch (error) {
+      console.error('Error in AI query:', error);
+      setErrorMessage(error instanceof Error ? error.message : 'Unknown error occurred');
+    } finally {
+      setIsLoading(false);
       setQuery('');
       setTranscript('');
-    } catch (error) {
-      console.error("Error asking AI:", error);
-      setLocalAiResponse("Sorry, there was an error processing your request. Please try again.");
-      setErrorMessage(error instanceof Error ? error.message : 'Unknown error occurred');
-      setIsLoading(false);
     }
+  };
+
+  // Format the AI response with code blocks
+  const formatResponse = (response: string) => {
+    if (!response) return null;
+    
+    if (response.includes('```')) {
+      // More accurate regex for code blocks
+      const parts = response.split(/(```[\w]*\n[\s\S]*?```)/g);
+      return (
+        <>
+          {parts.map((part, index) => {
+            if (part.startsWith('```')) {
+              const language = part.match(/```(\w+)?\n/)?.[1] || 'javascript';
+              const code = part.replace(/```[\w]*\n/, '').replace(/```$/, '');
+              return (
+                <div key={index} className="mb-4 rounded overflow-hidden">
+                  <SyntaxHighlighter
+                    language={language}
+                    style={atomOneDark}
+                    className="rounded neo-brutal"
+                  >
+                    {code}
+                  </SyntaxHighlighter>
+                </div>
+              );
+            } else {
+              return <p key={index} className="mb-4 whitespace-pre-wrap">{part}</p>;
+            }
+          })}
+        </>
+      );
+    }
+    
+    return <p className="whitespace-pre-wrap">{response}</p>;
   };
 
   const toggleListening = () => {
@@ -138,40 +184,6 @@ export const AIAssistant: React.FC<AIAssistantProps> = ({
       (window as any).recognitionInstance = null;
     }
     setIsListening(false);
-  };
-
-  const formatResponse = (response: string) => {
-    if (!response) return null;
-    
-    if (response.includes('```')) {
-      const parts = response.split(/```(\w+)?\n/);
-      return (
-        <>
-          {parts.map((part, index) => {
-            if (index % 3 === 0) {
-              return <p key={index} className="mb-4 whitespace-pre-wrap">{part}</p>;
-            } else if (index % 3 === 1) {
-              return null;
-            } else {
-              const language = parts[index - 1] || 'javascript';
-              return (
-                <div key={index} className="mb-4 rounded overflow-hidden">
-                  <SyntaxHighlighter
-                    language={language}
-                    style={atomOneDark}
-                    className="rounded neo-brutal"
-                  >
-                    {part}
-                  </SyntaxHighlighter>
-                </div>
-              );
-            }
-          })}
-        </>
-      );
-    }
-    
-    return <p className="whitespace-pre-wrap">{response}</p>;
   };
 
   const startSpeakingAI = () => {
@@ -281,16 +293,26 @@ export const AIAssistant: React.FC<AIAssistantProps> = ({
                   className="p-3 rounded-lg bg-red-100 dark:bg-red-900/30 border border-red-300 dark:border-red-900 text-red-800 dark:text-red-300"
                 >
                   <p className="text-sm font-medium">Error: {errorMessage}</p>
+                  {apiKeyValid === false && (
+                    <div className="mt-2 text-xs">
+                      <p>Please check that:</p>
+                      <ol className="list-decimal pl-4 mt-1 space-y-1">
+                        <li>Your API key is correct and active in your Groq account</li>
+                        <li>The key is properly set in the .env file without quotes or spaces</li>
+                        <li>You've restarted the application after updating the key</li>
+                      </ol>
+                    </div>
+                  )}
                 </motion.div>
               )}
               
-              {localAiResponse ? (
+              {localResponse ? (
                 <motion.div
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   className="p-3 rounded-lg bg-white dark:bg-gray-700 shadow-sm"
                 >
-                  {formatResponse(localAiResponse)}
+                  {formatResponse(localResponse)}
                 </motion.div>
               ) : (
                 <div className="flex flex-col items-center justify-center h-full text-center text-gray-500">
